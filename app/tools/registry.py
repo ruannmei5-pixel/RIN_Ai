@@ -204,12 +204,11 @@ def build_default_tool_manager() -> ToolManager:
     from app.tools.calculator import calculator_tool
     from app.tools.datetime_tool import datetime_tool
     from app.tools.system import system_info_tool
-    from app.tools.files import file_reader_tool, workspace_list_tool
+    from app.tools.files import file_reader_tool
 
     manager = ToolManager()
     manager.register(calculator_tool())
     manager.register(datetime_tool())
     manager.register(system_info_tool())
     manager.register(file_reader_tool())
-    manager.register(workspace_list_tool())  # PHASE 7
     return manager

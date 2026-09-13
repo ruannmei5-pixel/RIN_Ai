@@ -27,7 +27,7 @@ from __future__ import annotations
 import threading
 from typing import Iterator, Tuple
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.logger import get_logger
@@ -38,18 +38,8 @@ from app.llm.ollama_client import (
     OllamaResponseError,
     OllamaTimeoutError,
 )
-from app.tools.files import list_workspace_entries, read_workspace_file
-from app.tools.registry import ToolValidationError
-from app.tools.system import get_system_info_dict
 
-from app.api.schemas import (
-    ChatRequest,
-    ChatResponse,
-    FileListResponse,
-    FileReadResponse,
-    HealthResponse,
-    SystemInfoResponse,
-)
+from app.api.schemas import ChatRequest, ChatResponse, HealthResponse
 
 logger = get_logger()
 
@@ -183,65 +173,3 @@ def chat_stream(payload: ChatRequest, request: Request):
             lock.release()
 
     return StreamingResponse(_stream(), media_type="text/plain; charset=utf-8")
-
-
-# ============================================================
-# SYSTEM / FILES (PHASE 7)
-#
-# Endpoint di bawah ini SENGAJA tidak melalui Assistant/Ollama sama
-# sekali — keduanya read-only dan murni memanggil fungsi tool yang
-# sama persis dipakai lewat chat (app/tools/system.py,
-# app/tools/files.py), supaya Web UI bisa menampilkan panel System
-# Info dan File Workspace tanpa perlu menunggu keputusan LLM, dan
-# tanpa pernah menyentuh assistant_lock/riwayat percakapan.
-# ============================================================
-
-@router.get("/system/info", response_model=SystemInfoResponse)
-def system_info() -> SystemInfoResponse:
-    """
-    Informasi sistem read-only (OS, hardware dasar, CPU, RAM, disk,
-    network). Data diambil langsung dari sistem nyata setiap request,
-    tidak pernah di-cache atau dikarang.
-    """
-    return SystemInfoResponse(**get_system_info_dict())
-
-
-@router.get("/files", response_model=FileListResponse)
-def list_files() -> FileListResponse:
-    """
-    Daftar file & folder di dalam folder workspace/ RIN (read-only).
-    Tidak pernah menampilkan apa pun di luar workspace.
-    """
-    entries = list_workspace_entries()
-    return FileListResponse(workspace="workspace/", entries=entries)
-
-
-@router.get("/files/read", response_model=FileReadResponse)
-def read_file(path: str = Query(..., description="Path relatif di dalam folder workspace/.")):
-    """
-    Membaca isi satu file teks di dalam workspace/ RIN.
-
-    Menggunakan validasi keamanan yang sama persis dengan tool
-    `file_reader` (path traversal, ekstensi, ukuran, nama sensitif —
-    lihat app/tools/files.py::resolve_safe_path). Error validasi
-    dikembalikan sebagai 400 dengan pesan ramah, bukan stack trace.
-    """
-    try:
-        content = read_workspace_file(path)
-    except ToolValidationError as exc:
-        message = str(exc)
-        status_code = 404 if "tidak ditemukan" in message.lower() else 400
-        return JSONResponse(status_code=status_code, content={"error": message})
-    except Exception as exc:  # pragma: no cover - jaring pengaman
-        logger.exception("Kesalahan tak terduga pada /api/files/read: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Terjadi kesalahan internal saat membaca file."},
-        )
-
-    truncated = False
-    if len(content) > 20_000:
-        content = content[:20_000]
-        truncated = True
-
-    return FileReadResponse(path=path, content=content, truncated=truncated)

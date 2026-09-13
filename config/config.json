@@ -11,7 +11,11 @@
         "calculator": true,
         "datetime": true,
         "system_info": true,
-        "file_reader": true,
-        "workspace_list": true
+        "file_reader": true
+    },
+    "web_search": {
+        "enabled": true,
+        "max_results": 3,
+        "timeout_seconds": 8
     }
 }

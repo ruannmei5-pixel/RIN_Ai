@@ -509,7 +509,12 @@
 
     const avatar = document.createElement("div");
     avatar.className = "avatar";
-    avatar.textContent = "R";
+
+    const avatarImg = document.createElement("img");
+    avatarImg.src = "/assets/rin-icon.png";
+    avatarImg.alt = "RIN";
+
+    avatar.appendChild(avatarImg);
 
     const col = document.createElement("div");
     col.className = "message-col";

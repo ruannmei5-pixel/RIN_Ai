@@ -16,3 +16,17 @@ uvicorn[standard]>=0.32.0
 # version, hostname, disk usage) hanya tanpa detail CPU/RAM — lihat
 # app/tools/system.py.
 psutil>=5.9.0
+
+# --- AUTOMATIC WEB SEARCH ---------------------------------------------
+
+# httpx: dipakai LANGSUNG oleh app/services/web_search.py untuk memanggil
+# Web Search API (Tavily). Sudah menjadi dependency transitif dari
+# `ollama` sebelumnya, sekarang dicantumkan eksplisit karena dipakai
+# langsung juga oleh modul baru ini.
+httpx>=0.27.0
+
+# python-dotenv: memuat TAVILY_API_KEY (dan variabel lain di masa depan)
+# dari file .env di root project ke environment, supaya API key TIDAK
+# PERNAH di-hardcode di source code — lihat app/core/config.py dan
+# .env.example.
+python-dotenv>=1.0.0

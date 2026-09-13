@@ -12,15 +12,9 @@ import pytest
 
 from app.tools.calculator import calculator_tool, safe_calculate
 from app.tools.datetime_tool import datetime_tool
-from app.tools.files import (
-    file_reader_tool,
-    list_workspace_entries,
-    resolve_safe_path,
-    workspace_list_tool,
-    WORKSPACE_DIR,
-)
+from app.tools.files import file_reader_tool, resolve_safe_path, WORKSPACE_DIR
 from app.tools.registry import ToolManager, ToolValidationError, build_default_tool_manager
-from app.tools.system import get_system_info_dict, system_info_tool
+from app.tools.system import system_info_tool
 
 
 # ============================================================
@@ -87,22 +81,6 @@ def test_system_info_tool_is_read_only_and_returns_text() -> None:
     assert "OS" in result
 
 
-def test_system_info_dict_has_expected_keys() -> None:
-    """PHASE 7: get_system_info_dict() dipakai oleh GET /api/system/info."""
-    info = get_system_info_dict()
-    for key in (
-        "os",
-        "architecture",
-        "python_version",
-        "hostname",
-        "cpu_percent",
-        "ram_total_gb",
-        "disk_total_gb",
-        "network_interfaces",
-    ):
-        assert key in info
-
-
 # ============================================================
 # FILE READER — sandbox & path traversal
 # ============================================================
@@ -120,25 +98,9 @@ def test_file_reader_rejects_absolute_path() -> None:
         resolve_safe_path("/etc/passwd")
 
 
-def test_file_reader_allows_phase7_text_extensions() -> None:
-    """PHASE 7: .py/.js/.html/.css/.yaml/.yml/.log kini diizinkan."""
-    for ext in (".py", ".js", ".html", ".css", ".yaml", ".yml", ".log"):
-        # Tidak melempar exception (validasi ekstensi lolos); file
-        # tidak perlu benar-benar ada untuk uji validasi ekstensi ini,
-        # tapi resolve_safe_path baru gagal di tahap file-not-exist
-        # kalau dipanggil lewat read_workspace_file, bukan di sini.
-        resolve_safe_path(f"contoh{ext}")
-
-
-def test_file_reader_rejects_binary_extension_with_friendly_message() -> None:
-    """PHASE 7: ekstensi biner ditolak dengan pesan khusus."""
-    with pytest.raises(ToolValidationError, match="belum mendukung"):
-        resolve_safe_path("foto.png")
-
-
 def test_file_reader_rejects_disallowed_extension() -> None:
     with pytest.raises(ToolValidationError):
-        resolve_safe_path("script.unknownext")
+        resolve_safe_path("script.py")
 
 
 def test_file_reader_rejects_sensitive_filename() -> None:
@@ -168,41 +130,6 @@ def test_file_reader_tool_denied_traversal_via_handler(tmp_path, monkeypatch) ->
 
 
 # ============================================================
-# WORKSPACE LISTING (PHASE 7)
-# ============================================================
-
-def test_list_workspace_entries_reflects_directory_contents(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.tools.files.WORKSPACE_DIR", tmp_path)
-
-    (tmp_path / "catatan.txt").write_text("halo", encoding="utf-8")
-    (tmp_path / "dokumen").mkdir()
-    (tmp_path / "dokumen" / "laporan.txt").write_text("isi", encoding="utf-8")
-
-    entries = list_workspace_entries()
-    paths = {entry["path"] for entry in entries}
-    assert "catatan.txt" in paths
-    assert "dokumen" in paths
-    assert "dokumen/laporan.txt" in paths
-
-
-def test_workspace_list_tool_handles_empty_workspace(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.tools.files.WORKSPACE_DIR", tmp_path)
-
-    tool = workspace_list_tool()
-    result = tool.handler({})
-    assert "kosong" in result.lower()
-
-
-def test_workspace_list_tool_lists_files(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.tools.files.WORKSPACE_DIR", tmp_path)
-    (tmp_path / "tugas.txt").write_text("isi", encoding="utf-8")
-
-    tool = workspace_list_tool()
-    result = tool.handler({})
-    assert "tugas.txt" in result
-
-
-# ============================================================
 # TOOL MANAGER / REGISTRY
 # ============================================================
 
@@ -225,13 +152,7 @@ def test_tool_manager_can_disable_tool() -> None:
     assert result.success is False
 
 
-def test_build_default_tool_manager_registers_all_tools() -> None:
+def test_build_default_tool_manager_registers_all_phase6_tools() -> None:
     manager = build_default_tool_manager()
     names = {tool.name for tool in manager.all_tools()}
-    assert names == {
-        "calculator",
-        "datetime",
-        "system_info",
-        "file_reader",
-        "workspace_list",
-    }
+    assert names == {"calculator", "datetime", "system_info", "file_reader"}

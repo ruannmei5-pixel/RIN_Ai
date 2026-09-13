@@ -10,7 +10,7 @@ endpoint /api/chat (non-streaming) dan /api/chat/stream (streaming).
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -57,57 +57,6 @@ class HealthResponse(BaseModel):
     status: str = Field(..., examples=["ok"])
     assistant: str = Field(..., examples=["RIN"])
     model: str = Field(..., examples=["qwen3:4b"])
-
-
-class NetworkInterfaceInfo(BaseModel):
-    """Satu interface jaringan lokal (PHASE 7)."""
-
-    name: str
-    address: str
-
-
-class SystemInfoResponse(BaseModel):
-    """Body response untuk GET /api/system/info (PHASE 7, read-only)."""
-
-    os: str
-    os_version: Optional[str] = None
-    architecture: Optional[str] = None
-    processor: Optional[str] = None
-    python_version: str
-    hostname: Optional[str] = None
-    local_ip: Optional[str] = None
-    cpu_cores_logical: Optional[int] = None
-    cpu_cores_physical: Optional[int] = None
-    cpu_percent: Optional[float] = None
-    ram_total_gb: Optional[float] = None
-    ram_used_gb: Optional[float] = None
-    ram_percent: Optional[float] = None
-    disk_total_gb: Optional[float] = None
-    disk_used_gb: Optional[float] = None
-    disk_percent: Optional[float] = None
-    network_interfaces: List[NetworkInterfaceInfo] = Field(default_factory=list)
-
-
-class WorkspaceEntry(BaseModel):
-    """Satu entri (file/folder) dalam workspace RIN (PHASE 7)."""
-
-    path: str
-    type: str = Field(..., description="'file' atau 'dir'")
-
-
-class FileListResponse(BaseModel):
-    """Body response untuk GET /api/files (PHASE 7)."""
-
-    workspace: str = Field(..., description="Path workspace RIN (relatif ke project root).")
-    entries: List[WorkspaceEntry]
-
-
-class FileReadResponse(BaseModel):
-    """Body response untuk GET /api/files/read (PHASE 7)."""
-
-    path: str
-    content: str
-    truncated: bool = False
 
 
 class ErrorResponse(BaseModel):

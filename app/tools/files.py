@@ -1,12 +1,10 @@
 """
 files.py
 
-Tool file_reader & workspace_list untuk RIN (PHASE 6E, diperluas PHASE 7).
+Tool file_reader untuk RIN (PHASE 6E).
 
-KEAMANAN (ATURAN UTAMA #12 & instruksi PHASE 6E/7):
-- Hanya boleh membaca file teks dengan ekstensi yang ada di
-  `_ALLOWED_EXTENSIONS` (PHASE 7 menambah .py, .js, .html, .css, .yaml,
-  .yml, .log di atas .txt/.md/.json/.csv Phase 6).
+KEAMANAN (ATURAN UTAMA #12 & instruksi PHASE 6E):
+- Hanya boleh membaca file dengan ekstensi .txt, .md, .json, .csv.
 - Hanya boleh membaca file di dalam WORKSPACE_DIR (folder `workspace/`
   di root project) — TIDAK ADA akses bebas ke seluruh filesystem.
 - Path traversal (../, ..\\, path absolut, path dengan drive letter)
@@ -14,57 +12,22 @@ KEAMANAN (ATURAN UTAMA #12 & instruksi PHASE 6E/7):
   pengecekan bahwa hasil akhir path benar-benar berada di dalam
   WORKSPACE_DIR.
 - Nama file yang mengindikasikan data sensitif (password, credential,
-  private key, .env, token, dst.) ditolak, sesuai instruksi ("kecuali
-  nanti dibuat permission system khusus").
-- File dengan ekstensi biner yang dikenal (gambar, executable, arsip,
-  dst.) ditolak dengan pesan khusus ("RIN belum mendukung pembacaan
-  file tersebut"), bukan pesan "ekstensi tidak diizinkan" yang generik,
-  sesuai instruksi PHASE 7.
-- `list_workspace_entries()` (PHASE 7) hanya membaca STRUKTUR
-  (nama file/folder), tidak pernah membaca ISI file di luar
-  ekstensi yang diizinkan.
+  private key, .env, token, dst.) ditolak untuk Phase 6 ini, sesuai
+  instruksi ("kecuali nanti dibuat permission system khusus").
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from app.tools.registry import Tool, ToolPermission, ToolValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 
-# PHASE 7: Phase 6 hanya mendukung .txt/.md/.json/.csv. Phase 7 menambah
-# beberapa ekstensi teks umum lain, tetap TIDAK PERNAH file biner.
-_ALLOWED_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".json",
-    ".csv",
-    ".py",
-    ".js",
-    ".html",
-    ".css",
-    ".yaml",
-    ".yml",
-    ".log",
-}
-
-# Ekstensi biner yang dikenal — dipakai HANYA untuk memberi pesan error
-# yang lebih ramah ("RIN belum mendukung pembacaan file tersebut")
-# dibanding pesan generik "ekstensi tidak diizinkan". Tidak pernah
-# dibaca sebagai teks dalam kondisi apa pun.
-_KNOWN_BINARY_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".zip", ".rar", ".7z", ".tar", ".gz",
-    ".exe", ".dll", ".so", ".bin", ".msi",
-    ".mp3", ".mp4", ".wav", ".avi", ".mov",
-    ".db", ".sqlite", ".sqlite3",
-}
-
-_MAX_FILE_SIZE_BYTES = 2_000_000  # 2 MB (PHASE 7); Phase 6 sebelumnya 200 KB
+_ALLOWED_EXTENSIONS = {".txt", ".md", ".json", ".csv"}
+_MAX_FILE_SIZE_BYTES = 200_000  # ~200 KB — cukup untuk catatan/teks biasa
 _MAX_PREVIEW_CHARS = 4000
 
 _SENSITIVE_KEYWORDS = (
@@ -123,82 +86,13 @@ def resolve_safe_path(relative_path: str) -> Path:
             "RIN tidak diizinkan membaca file yang tampak berisi data sensitif."
         )
 
-    suffix = candidate.suffix.lower()
-    if suffix not in _ALLOWED_EXTENSIONS:
-        if suffix in _KNOWN_BINARY_EXTENSIONS:
-            raise ToolValidationError(
-                "RIN belum mendukung pembacaan file tersebut."
-            )
+    if candidate.suffix.lower() not in _ALLOWED_EXTENSIONS:
         raise ToolValidationError(
             "RIN hanya dapat membaca file dengan ekstensi: "
             + ", ".join(sorted(_ALLOWED_EXTENSIONS))
         )
 
     return candidate
-
-
-# ============================================================
-# WORKSPACE LISTING (PHASE 7)
-# ============================================================
-
-def list_workspace_entries() -> List[Dict[str, Any]]:
-    """
-    Mengembalikan daftar file & folder di dalam WORKSPACE_DIR secara
-    rekursif, sebagai list of dict:
-
-        [{"path": "catatan.txt", "type": "file"},
-         {"path": "dokumen", "type": "dir"},
-         {"path": "dokumen/laporan.txt", "type": "file"}, ...]
-
-    `path` selalu relatif terhadap WORKSPACE_DIR dan memakai forward
-    slash ("/") agar konsisten di Windows maupun platform lain. Hanya
-    membaca STRUKTUR direktori (nama), tidak pernah membaca isi file.
-    Read-only dan tidak pernah keluar dari WORKSPACE_DIR karena hanya
-    melakukan `iterdir`/`rglob` di dalamnya.
-    """
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    workspace_resolved = WORKSPACE_DIR.resolve()
-
-    entries: List[Dict[str, Any]] = []
-    for path in sorted(workspace_resolved.rglob("*")):
-        relative = path.relative_to(workspace_resolved).as_posix()
-        entries.append({"path": relative, "type": "dir" if path.is_dir() else "file"})
-
-    return entries
-
-
-def _format_workspace_listing(entries: List[Dict[str, Any]]) -> str:
-    if not entries:
-        return "Folder workspace RIN saat ini masih kosong."
-
-    files_only = [entry for entry in entries if entry["type"] == "file"]
-    lines = [f"Di workspace RIN saat ini ada {len(files_only)} file:"]
-    for entry in entries:
-        icon = "📁" if entry["type"] == "dir" else "📄"
-        lines.append(f"{icon} {entry['path']}")
-    return "\n".join(lines)
-
-
-def _handle_list(arguments: Dict[str, Any]) -> str:
-    return _format_workspace_listing(list_workspace_entries())
-
-
-def workspace_list_tool() -> Tool:
-    return Tool(
-        name="workspace_list",
-        description=(
-            "Menampilkan daftar file dan folder yang ada di dalam folder "
-            "workspace/ milik project RIN (read-only, hanya nama, tidak "
-            "membaca isi file)."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {},
-        },
-        permission=ToolPermission.READ_ONLY,
-        handler=_handle_list,
-        status_message="📁 RIN memeriksa isi workspace...",
-    )
 
 
 def read_workspace_file(relative_path: str) -> str:
@@ -240,10 +134,9 @@ def file_reader_tool() -> Tool:
     return Tool(
         name="file_reader",
         description=(
-            "Membaca isi file teks (.txt, .md, .json, .csv, .py, .js, .html, "
-            ".css, .yaml, .yml, .log) yang berada di dalam folder workspace/ "
-            "milik project RIN. Tidak dapat mengakses file di luar folder ini "
-            "maupun file biner."
+            "Membaca isi file teks (.txt, .md, .json, .csv) yang berada di "
+            "dalam folder workspace/ milik project RIN. Tidak dapat mengakses "
+            "file di luar folder ini."
         ),
         input_schema={
             "type": "object",
