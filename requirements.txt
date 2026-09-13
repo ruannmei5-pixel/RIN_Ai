@@ -1,0 +1,18 @@
+# ollama: official Python client untuk berkomunikasi dengan Ollama local API
+# (menggantikan pemakaian `requests` mentah sebelumnya). Package ini juga
+# membawa `httpx` sebagai dependency transitif, yang dipakai untuk deteksi
+# error koneksi/timeout secara spesifik.
+ollama>=0.4.6
+
+# fastapi + uvicorn: dipakai untuk RIN API (PHASE 5A). CLI (run.py) tidak
+# bergantung pada keduanya sama sekali; keduanya hanya dipakai oleh
+# app/api/server.py. uvicorn[standard] menyertakan dependency opsional
+# (mis. websockets, watchfiles) yang berguna untuk development.
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# psutil: OPSIONAL, dipakai oleh tool system_info (PHASE 6D) untuk detail
+# CPU/RAM. Jika tidak terpasang, system_info tetap berjalan (OS, Python
+# version, hostname, disk usage) hanya tanpa detail CPU/RAM — lihat
+# app/tools/system.py.
+psutil>=5.9.0

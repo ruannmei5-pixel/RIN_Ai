@@ -1,0 +1,17 @@
+{
+    "assistant_name": "RIN",
+    "assistant_full_name": "Responsive Intelligent Navigator",
+    "language": "id",
+    "ollama": {
+        "host": "http://localhost:11434",
+        "model": "qwen3:4b",
+        "timeout_seconds": 60
+    },
+    "tools": {
+        "calculator": true,
+        "datetime": true,
+        "system_info": true,
+        "file_reader": true,
+        "workspace_list": true
+    }
+}

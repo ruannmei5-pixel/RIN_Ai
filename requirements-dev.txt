@@ -1,0 +1,4 @@
+# Dependency tambahan HANYA untuk development/testing, tidak dibutuhkan
+# saat menjalankan RIN secara normal (python run.py).
+-r requirements.txt
+pytest>=8.0.0

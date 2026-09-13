@@ -1,0 +1,33 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables
+.env
+
+# Logs
+logs/*.log
+
+# Local data / database
+data/*.db
+data/*.sqlite3
+
+# Workspace user files (jangan commit file kerja user)
+workspace/*
+!workspace/README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
