@@ -15,14 +15,84 @@
   <div id="srStatus" class="sr-only" role="status" aria-live="polite"></div>
 
   <div class="app-shell">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-mark">✦</span>
+        <div class="sidebar-header-text">
+          <div class="sidebar-title">RIN</div>
+          <div class="sidebar-tagline">Responsive AI</div>
+        </div>
+      </div>
+
+      <button type="button" class="sidebar-new-chat" id="sidebarNewChatBtn" data-page="chat">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        New Chat
+      </button>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">CHAT</div>
+        <button type="button" class="nav-item active" data-page="chat">
+          <span class="nav-icon">◉</span> Current Chat
+        </button>
+
+        <div class="nav-section-label">WORKSPACE</div>
+        <button type="button" class="nav-item" data-page="projects">
+          <span class="nav-icon">▦</span> Projects
+        </button>
+        <button type="button" class="nav-item" data-page="schedule">
+          <span class="nav-icon">◷</span> Schedule
+        </button>
+        <button type="button" class="nav-item" data-page="library">
+          <span class="nav-icon">▤</span> Library
+        </button>
+        <button type="button" class="nav-item" data-page="plugins">
+          <span class="nav-icon">◇</span> Plugins
+        </button>
+        <button type="button" class="nav-item" data-page="codex">
+          <span class="nav-icon">&lt;/&gt;</span> Codex
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button type="button" class="nav-item" data-page="settings">
+          <span class="nav-icon">⚙</span> Settings
+        </button>
+        <div class="sidebar-status-card">
+          <div class="sidebar-status-row">
+            <span class="sidebar-status-mark">✦</span>
+            <div>
+              <div class="sidebar-status-title">RIN</div>
+              <div class="sidebar-status-sub">Local AI</div>
+            </div>
+          </div>
+          <div class="sidebar-status-online">
+            <span class="status-dot" id="sidebarStatusDot"></span>
+            <span id="sidebarStatusLabel">Menghubungkan...</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- MAIN -->
     <div class="app">
 
       <!-- HEADER -->
       <header class="header">
         <div class="header-left">
-        <div class="logo" id="logoAvatar">
-          <img src="/assets/rin-icon.png" alt="RIN">
-        </div>
+          <button type="button" id="mobileMenuBtn" class="icon-button mobile-menu-btn" aria-label="Buka menu">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div class="logo" id="logoAvatar">
+            <img src="/assets/rin-icon.png" alt="RIN">
+          </div>
           <div class="header-text">
             <div class="header-title-row">
               <span class="header-title">RIN</span>
@@ -32,7 +102,7 @@
                 title="Memori percakapan RIN disimpan di SQLite lokal server. Indikator ini statis, bukan hasil pengecekan langsung ke server."
               >🧠 Memory aktif</span>
             </div>
-            <div class="header-subtitle">Responsive Intelligent Navigator</div>
+            <div class="header-subtitle" id="headerSubtitle">Responsive Intelligent Navigator</div>
           </div>
         </div>
         <div class="header-right">
@@ -60,70 +130,354 @@
         </div>
       </header>
 
-      <!-- CHAT AREA -->
-      <main class="chat-area" id="chatArea">
+      <div class="workspace-pages">
 
-        <!-- WELCOME SCREEN -->
-        <div class="welcome" id="welcomeScreen">
-          <div class="welcome-logo">
-            <img src="/assets/rin-icon.png" alt="RIN">
+        <!-- PAGE: CHAT -->
+        <section class="page-panel active" id="page-chat" data-page-panel="chat">
+          <main class="chat-area" id="chatArea">
+
+            <!-- WELCOME SCREEN -->
+            <div class="welcome" id="welcomeScreen">
+              <div class="welcome-logo">
+                <img src="/assets/rin-icon.png" alt="RIN">
+              </div>
+              <h1 class="welcome-title">RIN</h1>
+              <p class="welcome-subtitle">Responsive Intelligent Navigator</p>
+              <p class="welcome-desc">Teman AI pribadi yang siap membantu.</p>
+
+              <div class="quick-actions" id="quickActions">
+                <button class="quick-action" data-prompt="Halo RIN, kenalkan dirimu.">👋 Sapa RIN</button>
+                <button class="quick-action" data-prompt="Apa yang bisa kamu lakukan?">✨ Apa yang bisa kamu lakukan?</button>
+                <button class="quick-action" data-prompt="Bantu aku menyelesaikan masalah coding.">💻 Bantu saya coding</button>
+                <button class="quick-action" data-prompt="Jelaskan sebuah topik yang aku pilih.">📚 Jelaskan sesuatu</button>
+              </div>
+            </div>
+
+            <!-- MESSAGES -->
+            <div class="messages" id="messages"></div>
+
+          </main>
+
+          <!-- INPUT AREA -->
+          <footer class="input-area">
+            <!-- Transient voice status: "listening", "speaking", or a
+                 short error toast. Hidden by default; toggled from JS. -->
+            <div class="voice-status-bar" id="voiceStatusBar" hidden>
+              <span class="voice-status-text" id="voiceStatusText"></span>
+              <button type="button" id="voiceStatusStopBtn" class="voice-status-stop" hidden>Stop</button>
+            </div>
+
+            <form id="chatForm" class="chat-form">
+              <button
+                type="button"
+                id="micButton"
+                class="mic-button"
+                aria-label="Mulai input suara"
+                title="Input suara"
+              >🎙️</button>
+              <textarea
+                id="messageInput"
+                class="message-input"
+                placeholder="Tulis pesan untuk RIN..."
+                aria-label="Tulis pesan untuk RIN"
+                rows="1"
+                autocomplete="off"
+              ></textarea>
+              <button type="submit" id="sendButton" class="send-button" disabled aria-label="Kirim pesan">
+                <svg class="icon-send" viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M4 12L20 4L14 20L11 13L4 12Z" fill="currentColor"/>
+                </svg>
+                <svg class="icon-stop" viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="3" fill="currentColor"/>
+                </svg>
+              </button>
+            </form>
+          </footer>
+        </section>
+
+        <!-- PAGE: PROJECTS -->
+        <section class="page-panel" id="page-projects" data-page-panel="projects">
+          <div class="page-header">
+            <h2>Projects</h2>
+            <button type="button" class="primary-btn" id="projectNewBtn">+ New Project</button>
           </div>
-          <h1 class="welcome-title">RIN</h1>
-          <p class="welcome-subtitle">Responsive Intelligent Navigator</p>
-          <p class="welcome-desc">Teman AI pribadi yang siap membantu.</p>
 
-          <div class="quick-actions" id="quickActions">
-            <button class="quick-action" data-prompt="Halo RIN, kenalkan dirimu.">👋 Sapa RIN</button>
-            <button class="quick-action" data-prompt="Apa yang bisa kamu lakukan?">✨ Apa yang bisa kamu lakukan?</button>
-            <button class="quick-action" data-prompt="Bantu aku menyelesaikan masalah coding.">💻 Bantu saya coding</button>
-            <button class="quick-action" data-prompt="Jelaskan sebuah topik yang aku pilih.">📚 Jelaskan sesuatu</button>
+          <div class="empty-state-block" id="projectEmptyState" hidden>
+            <div class="empty-state-icon">▦</div>
+            <p class="empty-state-title">Belum ada project</p>
+            <p class="empty-state-desc">Create your first project to organize your work.</p>
+          </div>
+
+          <div class="project-grid" id="projectGrid" hidden></div>
+        </section>
+
+        <!-- PROJECT MODAL: create/edit project (shared) -->
+        <div class="modal-overlay" id="projectModalOverlay" hidden>
+          <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
+            <h3 id="projectModalTitle">New Project</h3>
+
+            <label class="form-label" for="projectNameInput">Nama project</label>
+            <input type="text" id="projectNameInput" class="form-input" placeholder="Nama project">
+            <p class="form-error" id="projectModalError" hidden>Nama project wajib diisi.</p>
+
+            <label class="form-label" for="projectDescInput">Deskripsi</label>
+            <textarea id="projectDescInput" class="form-textarea" rows="3" placeholder="Deskripsi (opsional)"></textarea>
+
+            <div class="modal-actions">
+              <button type="button" class="secondary-btn" id="projectModalCancel">Batal</button>
+              <button type="button" class="primary-btn" id="projectModalSave">Simpan</button>
+            </div>
           </div>
         </div>
 
-        <!-- MESSAGES -->
-        <div class="messages" id="messages"></div>
+        <!-- PAGE: SCHEDULE -->
+        <section class="page-panel" id="page-schedule" data-page-panel="schedule">
+          <div class="page-header">
+            <h2>Schedule</h2>
+            <button type="button" class="primary-btn" id="scheduleNewBtn">+ New Task</button>
+          </div>
 
-      </main>
+          <div class="filter-tabs" id="scheduleFilterTabs" role="tablist" aria-label="Filter task">
+            <button type="button" class="filter-tab active" data-filter="all">All</button>
+            <button type="button" class="filter-tab" data-filter="today">Today</button>
+            <button type="button" class="filter-tab" data-filter="upcoming">Upcoming</button>
+            <button type="button" class="filter-tab" data-filter="completed">Completed</button>
+          </div>
 
-      <!-- INPUT AREA -->
-      <footer class="input-area">
-        <!-- Transient voice status: "listening", "speaking", or a
-             short error toast. Hidden by default; toggled from JS. -->
-        <div class="voice-status-bar" id="voiceStatusBar" hidden>
-          <span class="voice-status-text" id="voiceStatusText"></span>
-          <button type="button" id="voiceStatusStopBtn" class="voice-status-stop" hidden>Stop</button>
+          <div class="empty-state-block" id="scheduleEmptyState" hidden>
+            <div class="empty-state-icon">◷</div>
+            <p class="empty-state-title" id="scheduleEmptyTitle">Belum ada task</p>
+            <p class="empty-state-desc" id="scheduleEmptyDesc">
+              Buat task pertamamu untuk mulai mengatur jadwal.
+            </p>
+          </div>
+
+          <div class="task-list" id="scheduleList" hidden></div>
+        </section>
+
+        <!-- SCHEDULE MODAL: create/edit task (shared) -->
+        <div class="modal-overlay" id="scheduleModalOverlay" hidden>
+          <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="scheduleModalTitle">
+            <h3 id="scheduleModalTitle">New Task</h3>
+
+            <label class="form-label" for="scheduleTitleInput">Judul</label>
+            <input type="text" id="scheduleTitleInput" class="form-input" placeholder="Judul task">
+            <p class="form-error" id="scheduleModalError" hidden>Judul task wajib diisi.</p>
+
+            <label class="form-label" for="scheduleDescInput">Deskripsi</label>
+            <textarea id="scheduleDescInput" class="form-textarea" rows="3" placeholder="Deskripsi (opsional)"></textarea>
+
+            <div class="form-row">
+              <div class="form-col">
+                <label class="form-label" for="scheduleDateInput">Tanggal</label>
+                <input type="date" id="scheduleDateInput" class="form-input">
+              </div>
+              <div class="form-col">
+                <label class="form-label" for="scheduleTimeInput">Waktu</label>
+                <input type="time" id="scheduleTimeInput" class="form-input">
+              </div>
+            </div>
+
+            <label class="form-label" for="schedulePriorityInput">Prioritas</label>
+            <select id="schedulePriorityInput" class="form-input">
+              <option value="low">Rendah</option>
+              <option value="medium" selected>Sedang</option>
+              <option value="high">Tinggi</option>
+            </select>
+
+            <div class="modal-actions">
+              <button type="button" class="secondary-btn" id="scheduleModalCancel">Batal</button>
+              <button type="button" class="primary-btn" id="scheduleModalSave">Simpan</button>
+            </div>
+          </div>
         </div>
 
-        <form id="chatForm" class="chat-form">
-          <button
-            type="button"
-            id="micButton"
-            class="mic-button"
-            aria-label="Mulai input suara"
-            title="Input suara"
-          >🎙️</button>
-          <textarea
-            id="messageInput"
-            class="message-input"
-            placeholder="Tulis pesan untuk RIN..."
-            aria-label="Tulis pesan untuk RIN"
-            rows="1"
-            autocomplete="off"
-          ></textarea>
-          <button type="submit" id="sendButton" class="send-button" disabled aria-label="Kirim pesan">
-            <svg class="icon-send" viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <path d="M4 12L20 4L14 20L11 13L4 12Z" fill="currentColor"/>
-            </svg>
-            <svg class="icon-stop" viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <rect x="5" y="5" width="14" height="14" rx="3" fill="currentColor"/>
-            </svg>
-          </button>
-        </form>
-      </footer>
+        <!-- PAGE: LIBRARY -->
+        <section class="page-panel" id="page-library" data-page-panel="library">
+          <div class="page-header">
+            <h2>Library</h2>
+            <button type="button" class="primary-btn" id="libNewNoteBtn">+ New Note</button>
+          </div>
 
+          <div class="lib-search-row">
+            <input type="search" id="libSearchInput" class="lib-search-input" placeholder="Search library...">
+          </div>
+
+          <!-- Editor panel (shared for create + edit) -->
+          <div class="lib-editor-panel" id="libEditorPanel" hidden>
+            <h3 id="libEditorTitle">Catatan Baru</h3>
+            <input type="text" id="libTitleInput" class="lib-editor-input" placeholder="Judul catatan">
+            <input type="text" id="libTagsInput" class="lib-editor-input" placeholder="Tag (pisahkan dengan koma)">
+            <textarea id="libContentInput" class="lib-editor-textarea" rows="6" placeholder="Isi catatan..."></textarea>
+            <div class="lib-editor-actions">
+              <button type="button" class="secondary-btn" id="libCancelBtn">Batal</button>
+              <button type="button" class="primary-btn" id="libSaveBtn">Simpan</button>
+            </div>
+          </div>
+
+          <p class="empty-state" id="libEmptyState" hidden></p>
+          <div class="lib-note-list" id="libNoteList"></div>
+        </section>
+
+        <!-- PAGE: PLUGINS -->
+        <section class="page-panel" id="page-plugins" data-page-panel="plugins">
+          <div class="page-header">
+            <h2>Plugins</h2>
+            <button type="button" class="secondary-btn" id="pluginRefreshBtn">↻ Refresh</button>
+          </div>
+
+          <p class="plugin-status" id="pluginLoadStatus" hidden></p>
+
+          <h3 class="section-label">Connected Tools</h3>
+          <div class="conn-grid" id="pluginConnections"></div>
+
+          <h3 class="section-label">Available Tools</h3>
+          <div class="tool-grid" id="pluginToolList"></div>
+        </section>
+
+        <!-- PAGE: CODEX (belum diimplementasikan pada phase ini) -->
+        <section class="page-panel" id="page-codex" data-page-panel="codex">
+          <div class="page-header">
+            <h2>Codex</h2>
+          </div>
+          <div class="empty-state-block">
+            <div class="empty-state-icon">&lt;/&gt;</div>
+            <p class="empty-state-title">Codex belum tersedia</p>
+            <p class="empty-state-desc">
+              Coding workspace ini butuh endpoint filesystem baru dengan
+              validasi path di sisi backend sebelum bisa dibuat aman —
+              belum diimplementasikan pada phase ini.
+            </p>
+          </div>
+        </section>
+
+        <!-- PAGE: SETTINGS -->
+        <section class="page-panel" id="page-settings" data-page-panel="settings">
+          <div class="page-header">
+            <h2>Settings</h2>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-label">Appearance</h3>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Compact mode</div>
+                <div class="settings-row-desc">Kurangi padding &amp; spacing untuk tampilan lebih ringkas.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingCompactMode">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-label">Chat</h3>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Enter untuk kirim</div>
+                <div class="settings-row-desc">Tekan Enter untuk mengirim pesan (Shift+Enter untuk baris baru).</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingEnterToSend">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Tampilkan timestamp</div>
+                <div class="settings-row-desc">Tampilkan waktu di setiap pesan chat.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingShowTimestamps">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Auto scroll</div>
+                <div class="settings-row-desc">Scroll otomatis ke pesan terbaru saat streaming.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingAutoScroll">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-label">Voice</h3>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Voice enabled</div>
+                <div class="settings-row-desc">Izinkan input/output suara di halaman Chat.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingVoiceEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Auto speak response</div>
+                <div class="settings-row-desc">Bacakan otomatis jawaban RIN.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingAutoSpeak">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-label">AI</h3>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Model</div>
+                <div class="settings-row-desc">Nama model Ollama (kosongkan untuk default server).</div>
+              </div>
+              <input type="text" id="settingAiModel" class="form-input settings-inline-input" placeholder="mis. llama3.1">
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Temperature</div>
+                <div class="settings-row-desc" id="settingTemperatureValue">0.7</div>
+              </div>
+              <input type="range" id="settingAiTemperature" min="0" max="2" step="0.1" value="0.7" class="settings-slider">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-label">Connection</h3>
+            <div class="settings-row">
+              <div class="settings-row-label">Backend RIN</div>
+              <span class="status-pill">
+                <span class="status-dot" id="settingBackendDot"></span>
+                <span id="settingBackendLabel">Menghubungkan...</span>
+              </span>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-label">Ollama</div>
+              <span class="status-pill" id="settingOllamaStatus">Tidak diketahui</span>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-label">Web search</div>
+              <span class="status-pill" id="settingWebSearchStatus">Tidak diketahui</span>
+            </div>
+          </div>
+        </section>
+
+      </div>
     </div>
   </div>
 
+  <script src="/js/storage.js"></script>
+  <script src="/js/workspace.js"></script>
+  <script src="/js/library.js"></script>
+  <script src="/js/plugins.js"></script>
+  <script src="/js/schedule.js"></script>
+  <script src="/js/projects.js"></script>
+  <script src="/js/settings.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

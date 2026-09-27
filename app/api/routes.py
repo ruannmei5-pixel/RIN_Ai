@@ -39,7 +39,17 @@ from app.llm.ollama_client import (
     OllamaTimeoutError,
 )
 
-from app.api.schemas import ChatRequest, ChatResponse, HealthResponse
+from app.api.schemas import (
+    ChatRequest,
+    ChatResponse,
+    ConnectionInfo,
+    HealthResponse,
+    PluginInfo,
+    PluginsResponse,
+    PluginToggleRequest,
+    PluginToggleResponse,
+)
+from app.services.web_search import is_configured as web_search_is_configured
 
 logger = get_logger()
 
@@ -173,3 +183,84 @@ def chat_stream(payload: ChatRequest, request: Request):
             lock.release()
 
     return StreamingResponse(_stream(), media_type="text/plain; charset=utf-8")
+
+
+@router.get("/plugins", response_model=PluginsResponse)
+def plugins(request: Request) -> PluginsResponse:
+    """
+    Membaca Tool Registry (app/tools/registry.py) yang SUDAH ADA — tidak
+    ada plugin system baru di sini, hanya jendela baca ke ToolManager
+    yang sama persis dipakai Assistant untuk decide_tool_call.
+
+    `connections` melaporkan status Ollama/Web Search apa adanya:
+    - Ollama: "configured" (host+model dari config.json). Endpoint ini
+      TIDAK memanggil Ollama, jadi tidak pernah mengklaim "connected"
+      tanpa benar-benar mengetesnya (konsisten dengan /api/health yang
+      juga tidak memanggil Ollama).
+    - Web Search: "connected" jika TAVILY_API_KEY diset DAN
+      config.web_search.enabled True; "not_configured" jika API key
+      belum diset; "disabled" jika sengaja dimatikan di config.json.
+    """
+    assistant = request.app.state.assistant
+    config = request.app.state.config
+
+    tools = [
+        PluginInfo(
+            name=tool.name,
+            description=tool.description,
+            permission=tool.permission.value,
+            enabled=tool.enabled,
+            status_message=tool.status_message,
+        )
+        for tool in assistant.tools.all_tools()
+    ]
+
+    if not config.web_search.enabled:
+        web_search_status = "disabled"
+        web_search_detail = "Web search dimatikan di config.json (web_search.enabled=false)."
+    elif web_search_is_configured():
+        web_search_status = "connected"
+        web_search_detail = f"Tavily aktif, maks {config.web_search.max_results} hasil per pencarian."
+    else:
+        web_search_status = "not_configured"
+        web_search_detail = "TAVILY_API_KEY belum diset (lihat .env.example)."
+
+    connections = [
+        ConnectionInfo(
+            name="Ollama",
+            status="configured",
+            detail=f"{config.ollama.model} @ {config.ollama.host}",
+        ),
+        ConnectionInfo(
+            name="Web Search (Tavily)",
+            status=web_search_status,
+            detail=web_search_detail,
+        ),
+    ]
+
+    return PluginsResponse(tools=tools, connections=connections)
+
+
+@router.post("/plugins/{name}/toggle", response_model=PluginToggleResponse)
+def toggle_plugin(name: str, payload: PluginToggleRequest, request: Request):
+    """
+    Enable/disable satu tool lewat ToolManager.set_enabled() yang SUDAH
+    ADA (registry.py). Tidak membuat mekanisme enable/disable baru.
+
+    Diserialkan lewat assistant_lock yang sama dengan /api/chat, supaya
+    tidak ada race condition dengan request chat yang sedang membaca
+    daftar tool aktif (ToolManager.ollama_schemas()).
+    """
+    assistant = request.app.state.assistant
+    lock: threading.Lock = request.app.state.assistant_lock
+
+    with lock:
+        tool = assistant.tools.get(name)
+        if tool is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Tool '{name}' tidak ditemukan di Tool Registry."},
+            )
+        assistant.tools.set_enabled(name, payload.enabled)
+
+    return PluginToggleResponse(name=name, enabled=payload.enabled)

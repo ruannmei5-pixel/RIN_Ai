@@ -59,6 +59,55 @@ class HealthResponse(BaseModel):
     model: str = Field(..., examples=["qwen3:4b"])
 
 
+class PluginInfo(BaseModel):
+    """
+    Satu entri tool dari Tool Registry (app/tools/registry.py), apa
+    adanya — tidak ada status yang dikarang di sini. `enabled`
+    mencerminkan ToolManager._tools[name].enabled secara langsung.
+    """
+
+    name: str = Field(..., examples=["calculator"])
+    description: str
+    permission: str = Field(..., examples=["SAFE", "READ_ONLY", "RESTRICTED"])
+    enabled: bool
+    status_message: str = ""
+
+
+class ConnectionInfo(BaseModel):
+    """
+    Satu koneksi/servis eksternal yang dipakai RIN (Ollama, Web Search).
+
+    `status` HANYA salah satu dari: "configured", "connected",
+    "not_configured", "disabled" — dipilih berdasarkan kondisi
+    backend sungguhan, TIDAK PERNAH di-hardcode "connected" begitu
+    saja (lihat routes.py::plugins()).
+    """
+
+    name: str = Field(..., examples=["Ollama"])
+    status: str = Field(..., examples=["configured", "connected", "not_configured", "disabled"])
+    detail: str = ""
+
+
+class PluginsResponse(BaseModel):
+    """Body response untuk GET /api/plugins."""
+
+    tools: list[PluginInfo]
+    connections: list[ConnectionInfo]
+
+
+class PluginToggleRequest(BaseModel):
+    """Body request untuk POST /api/plugins/{name}/toggle."""
+
+    enabled: bool = Field(..., description="True untuk mengaktifkan tool, False untuk menonaktifkan.")
+
+
+class PluginToggleResponse(BaseModel):
+    """Body response untuk POST /api/plugins/{name}/toggle."""
+
+    name: str
+    enabled: bool
+
+
 class ErrorResponse(BaseModel):
     """
     Bentuk body error yang dikirim ke client saat terjadi kegagalan.

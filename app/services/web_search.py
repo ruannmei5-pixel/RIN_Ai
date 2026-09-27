@@ -35,9 +35,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import httpx
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from app.core.logger import get_logger
 
