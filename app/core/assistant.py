@@ -182,7 +182,7 @@ class Assistant:
         )
 
         # =========================================================
-        # TAHAP 3 — AI PROVIDER ROUTER (NVIDIA / OpenRouter / Ollama)
+        # TAHAP 3 — AI PROVIDER ROUTER (NVIDIA / Ollama)
         # =========================================================
         #
         # self.client (OllamaClient di atas) TETAP dipakai langsung
@@ -190,7 +190,7 @@ class Assistant:
         # routing, search classifier di search_router.py) — lihat
         # catatan module-level. Untuk balasan chat ke user, Assistant
         # SELALU lewat ai_router di bawah ini, supaya provider yang
-        # dipakai (Ollama/NVIDIA/OpenRouter) mengikuti AI_PROVIDER dan
+        # dipakai (Ollama/NVIDIA) mengikuti AI_PROVIDER dan
         # bisa dipilih per-request dari Settings.
 
         self.ai_router = AIProviderRouter(config, ollama_client=self.client)
@@ -595,7 +595,7 @@ class Assistant:
                 ↓
             jika system_info → tool
                 ↓
-            jika bukan → AI Provider Router (Ollama/NVIDIA/OpenRouter)
+            jika bukan → AI Provider Router (Ollama/NVIDIA)
                 ↓
             simpan SQLite
 
@@ -725,7 +725,7 @@ class Assistant:
             hasil tool dikirim sebagai satu chunk.
 
         Untuk chat biasa:
-            menggunakan AI Provider Router (Ollama/NVIDIA/OpenRouter)
+            menggunakan AI Provider Router (Ollama/NVIDIA)
             streaming. `provider`/`model` — lihat docstring ask().
         """
 
