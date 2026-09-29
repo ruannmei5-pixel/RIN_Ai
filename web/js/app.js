@@ -582,6 +582,39 @@
   // ---------------------------------------------------------
   // Sending messages (streaming via POST /api/chat/stream)
   // ---------------------------------------------------------
+  // ---------------------------------------------------------
+  // TAHAP 3 — AI provider info (payload + header subtitle)
+  // ---------------------------------------------------------
+  const headerSubtitle = document.getElementById("headerSubtitle");
+  const PROVIDER_NAMES = { ollama: "Ollama", nvidia: "NVIDIA AI", openrouter: "OpenRouter" };
+
+  function buildChatPayload(text) {
+    const payload = { message: text, session_id: sessionId };
+    const st = window.RinSettings;
+    const provider = st && st.get("aiProvider");
+    const model = st && st.get("aiModel");
+    if (provider) payload.provider = provider;
+    if (model) payload.model = model;
+    return payload;
+  }
+
+  // Header ringan: "NVIDIA AI · model" atau, jika fallback dipakai,
+  // "Ollama · model  ↳ fallback from NVIDIA AI". Data dari response
+  // header backend (tidak ada API key/error mentah).
+  function updateProviderHeader(res) {
+    if (!headerSubtitle || !res || !res.headers) return;
+    const used = res.headers.get("X-Provider-Used");
+    if (!used) return;
+    const requested = res.headers.get("X-Provider-Requested") || used;
+    const fallback = res.headers.get("X-Fallback-Used") === "true";
+    const model = res.headers.get("X-Model-Used") || "";
+    const name = PROVIDER_NAMES[used] || used;
+    let text = model ? name + " · " + model : name;
+    if (fallback) text += " ↳ fallback from " + (PROVIDER_NAMES[requested] || requested);
+    headerSubtitle.textContent = text;
+    headerSubtitle.title = fallback ? "Using " + name + " fallback" : "";
+  }
+
   function setSendingState(sending) {
     isSending = sending;
     sendButton.classList.toggle("loading", sending);
@@ -628,12 +661,21 @@
         // `session_id` is sent for forward-compatibility only — the
         // current backend accepts and ignores it (see schemas.py).
         // It has no effect on memory/session behaviour today.
-        body: JSON.stringify({ message: trimmed, session_id: sessionId }),
+        body: JSON.stringify(buildChatPayload(trimmed)),
         signal: controller.signal,
       });
 
+      updateProviderHeader(res);
+
       if (!res.ok) {
-        setAssistantError(bubble, friendlyErrorForStatus(res.status), retry);
+        // TAHAP 3: backend mengirim pesan error yang sudah disanitasi
+        // ({"error": "..."}), mis. "NVIDIA AI: API key belum dikonfigurasi."
+        let serverMsg = "";
+        try {
+          const errBody = await res.json();
+          if (errBody && typeof errBody.error === "string") serverMsg = errBody.error;
+        } catch (_) { /* body bukan JSON */ }
+        setAssistantError(bubble, serverMsg || friendlyErrorForStatus(res.status), retry);
         announce("Terjadi kesalahan saat menghubungi RIN.");
         return;
       }

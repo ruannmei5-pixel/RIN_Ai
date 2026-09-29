@@ -76,8 +76,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.assistant_lock = threading.Lock()
 
     logger.info(
-        "RIN API siap. assistant=%s model=%s host=%s",
+        "RIN API siap. assistant=%s ai_provider=%s model=%s ollama_host=%s",
         config.assistant_name,
+        config.ai.provider,
         config.ollama.model,
         config.ollama.host,
     )
@@ -113,6 +114,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # TAHAP 3: expose_headers WAJIB diisi eksplisit supaya JavaScript di
+    # browser (fetch().headers.get(...)) bisa MEMBACA header custom di
+    # bawah ini. Tanpa ini, browser tetap menerima header-nya di level
+    # jaringan tapi API fetch() Response.headers akan menyembunyikannya
+    # (CORS default: hanya beberapa header "safelisted" yang boleh
+    # dibaca lintas origin).
+    expose_headers=[
+        "X-Provider-Used",
+        "X-Provider-Requested",
+        "X-Fallback-Used",
+    ],
 )
 
 app.include_router(router)

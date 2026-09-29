@@ -242,7 +242,16 @@ class OllamaClient:
     # CHAT NORMAL
     # ========================================================
 
-    def chat(self, messages: List[ChatMessage]) -> str:
+    def chat(
+        self,
+        messages: List[ChatMessage],
+        model: Optional[str] = None,
+    ) -> str:
+        # TAHAP 3: `model` opsional memungkinkan caller (mis. AI Provider
+        # Router / pemilihan model dari Settings) menimpa model default
+        # untuk SATU panggilan ini saja, tanpa mengubah self.model
+        # (perilaku lama tanpa argumen ini tidak berubah sama sekali).
+        active_model = model or self.model
 
         payload = [
             {
@@ -255,7 +264,7 @@ class OllamaClient:
         try:
 
             response = self._client.chat(
-                model=self.model,
+                model=active_model,
                 messages=payload,
                 think=False,
                 stream=False,
@@ -268,7 +277,7 @@ class OllamaClient:
             try:
 
                 response = self._client.chat(
-                    model=self.model,
+                    model=active_model,
                     messages=payload,
                     stream=False,
                 )
@@ -449,7 +458,11 @@ class OllamaClient:
     def chat_stream(
         self,
         messages: List[ChatMessage],
+        model: Optional[str] = None,
     ) -> Iterator[str]:
+        # TAHAP 3: lihat catatan pada chat() di atas — parameter `model`
+        # opsional, default tetap self.model seperti sebelumnya.
+        active_model = model or self.model
 
         payload = [
             {
@@ -462,7 +475,7 @@ class OllamaClient:
         try:
 
             stream = self._client.chat(
-                model=self.model,
+                model=active_model,
                 messages=payload,
                 think=False,
                 stream=True,
@@ -473,7 +486,7 @@ class OllamaClient:
             try:
 
                 stream = self._client.chat(
-                    model=self.model,
+                    model=active_model,
                     messages=payload,
                     stream=True,
                 )

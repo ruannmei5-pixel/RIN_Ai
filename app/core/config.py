@@ -24,11 +24,16 @@ AUTOMATIC WEB SEARCH:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
+
+from app.core.logger import get_logger
+
+logger = get_logger()
 
 
 # Path root project dihitung relatif terhadap file ini,
@@ -71,6 +76,54 @@ class WebSearchConfig:
 
 
 @dataclass
+class NvidiaConfig:
+    """
+    TAHAP 3 — Konfigurasi NVIDIA AI provider.
+
+    SEMUANYA dibaca dari environment variable (NVIDIA_API_KEY,
+    NVIDIA_BASE_URL, NVIDIA_MODEL), TIDAK PERNAH di-hardcode dan TIDAK
+    PERNAH ada di config.json (config.json tidak menyimpan secret).
+    """
+
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+@dataclass
+class OpenRouterConfig:
+    """
+    TAHAP 3 — Konfigurasi OpenRouter provider.
+
+    Sama seperti NvidiaConfig: seluruhnya dari environment variable
+    (OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL).
+    """
+
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+@dataclass
+class AIRouterConfig:
+    """
+    TAHAP 3 — Konfigurasi terpusat AI Provider Router.
+
+    provider           : "ollama" | "nvidia" | "openrouter"
+                          (env AI_PROVIDER, default "ollama")
+    fallback_enabled    : env AI_FALLBACK_ENABLED (default True)
+    fallback_provider   : env AI_FALLBACK_PROVIDER (default "ollama")
+
+    Provider selection SENGAJA hanya ada di SATU tempat (di sini +
+    app/llm/router.py), bukan tersebar di banyak file.
+    """
+
+    provider: str = "ollama"
+    fallback_enabled: bool = True
+    fallback_provider: str = "ollama"
+
+
+@dataclass
 class AppConfig:
     assistant_name: str
     assistant_full_name: str
@@ -84,6 +137,11 @@ class AppConfig:
     # di config.json (mis. config.json lama sebelum fitur ini), dipakai
     # default WebSearchConfig() di atas (enabled=True, 3 hasil, 8 detik).
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    # TAHAP 3 — MULTI AI PROVIDER: provider selection (env-based) +
+    # konfigurasi cloud provider (env-based, tidak ada di config.json).
+    ai: AIRouterConfig = field(default_factory=AIRouterConfig)
+    nvidia: NvidiaConfig = field(default_factory=NvidiaConfig)
+    openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
 
 
 def load_config(config_path: Path = CONFIG_PATH) -> AppConfig:
@@ -135,6 +193,10 @@ def load_config(config_path: Path = CONFIG_PATH) -> AppConfig:
             timeout_seconds=int(raw_web_search.get("timeout_seconds", 8)),
         )
 
+        ai_config = _load_ai_router_config()
+        nvidia_config = _load_nvidia_config()
+        openrouter_config = _load_openrouter_config()
+
         app_config = AppConfig(
             assistant_name=data["assistant_name"],
             assistant_full_name=data["assistant_full_name"],
@@ -142,6 +204,9 @@ def load_config(config_path: Path = CONFIG_PATH) -> AppConfig:
             ollama=ollama_config,
             tools_enabled=tools_enabled,
             web_search=web_search_config,
+            ai=ai_config,
+            nvidia=nvidia_config,
+            openrouter=openrouter_config,
         )
     except KeyError as exc:
         raise ConfigError(
@@ -149,3 +214,65 @@ def load_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         ) from exc
 
     return app_config
+
+
+# ============================================================
+# TAHAP 3 — MULTI AI PROVIDER: environment-based config
+# ============================================================
+#
+# Provider selection & kredensial cloud provider SENGAJA dibaca dari
+# environment variable (bukan config.json), sesuai instruksi TAHAP 3:
+# "Buat konfigurasi terpusat" + "API key HANYA berada di
+# backend/environment". Fungsi-fungsi ini dipanggil oleh load_config()
+# di atas, SETELAH load_dotenv(PROJECT_ROOT / ".env") pada module-level
+# sudah berjalan, sehingga .env ikut terbaca.
+
+_VALID_PROVIDER_IDS = ("ollama", "nvidia", "openrouter")
+
+
+def _load_ai_router_config() -> "AIRouterConfig":
+    provider = os.getenv("AI_PROVIDER", "ollama").strip().lower() or "ollama"
+    if provider not in _VALID_PROVIDER_IDS:
+        logger.warning(
+            "AI_PROVIDER=%r tidak dikenal (harus salah satu dari %s). "
+            "Memakai 'ollama'.",
+            provider,
+            _VALID_PROVIDER_IDS,
+        )
+        provider = "ollama"
+
+    fallback_provider = os.getenv("AI_FALLBACK_PROVIDER", "ollama").strip().lower() or "ollama"
+    if fallback_provider not in _VALID_PROVIDER_IDS:
+        logger.warning(
+            "AI_FALLBACK_PROVIDER=%r tidak dikenal. Memakai 'ollama'.",
+            fallback_provider,
+        )
+        fallback_provider = "ollama"
+
+    fallback_enabled_raw = os.getenv("AI_FALLBACK_ENABLED", "true").strip().lower()
+    fallback_enabled = fallback_enabled_raw not in ("false", "0", "no", "off")
+
+    return AIRouterConfig(
+        provider=provider,
+        fallback_enabled=fallback_enabled,
+        fallback_provider=fallback_provider,
+    )
+
+
+def _load_nvidia_config() -> "NvidiaConfig":
+    return NvidiaConfig(
+        api_key=os.getenv("NVIDIA_API_KEY", "").strip(),
+        base_url=os.getenv("NVIDIA_BASE_URL", "").strip().rstrip("/"),
+        model=os.getenv("NVIDIA_MODEL", "").strip(),
+    )
+
+
+def _load_openrouter_config() -> "OpenRouterConfig":
+    return OpenRouterConfig(
+        api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
+        base_url=(
+            os.getenv("OPENROUTER_BASE_URL", "").strip().rstrip("/")
+            or "https://openrouter.ai/api/v1"
+        ),
+        model=os.getenv("OPENROUTER_MODEL", "").strip(),
+    )

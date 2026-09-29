@@ -35,6 +35,25 @@ class ChatRequest(BaseModel):
         ),
         examples=[None],
     )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "TAHAP 3: override AI provider untuk request ini saja "
+            "('ollama' | 'nvidia' | 'openrouter'). Opsional — jika kosong, "
+            "dipakai AI_PROVIDER dari environment. Endpoint lama yang "
+            "tidak mengirim field ini tetap kompatibel."
+        ),
+        examples=[None],
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "TAHAP 3: override nama model untuk request ini saja. "
+            "Opsional — jika kosong, dipakai model default provider yang "
+            "dipilih (dari environment/configuration)."
+        ),
+        examples=[None],
+    )
 
     @field_validator("message")
     @classmethod
@@ -49,6 +68,18 @@ class ChatResponse(BaseModel):
     """Body response untuk POST /api/chat (non-streaming)."""
 
     response: str = Field(..., description="Balasan final dari RIN.")
+    provider_used: Optional[str] = Field(
+        default=None,
+        description="TAHAP 3: id provider yang benar-benar menjawab (mis. 'ollama').",
+    )
+    provider_requested: Optional[str] = Field(
+        default=None,
+        description="TAHAP 3: id provider yang diminta (bisa beda dari provider_used jika fallback dipakai).",
+    )
+    fallback_used: bool = Field(
+        default=False,
+        description="TAHAP 3: True jika provider_requested gagal dan RIN memakai AI_FALLBACK_PROVIDER.",
+    )
 
 
 class HealthResponse(BaseModel):
@@ -118,3 +149,43 @@ class ErrorResponse(BaseModel):
     """
 
     error: str
+
+
+# ============================================================
+# TAHAP 3 — MULTI AI PROVIDER
+# ============================================================
+
+class AIProviderInfo(BaseModel):
+    """Satu entri provider untuk GET /api/ai/providers. TIDAK PERNAH berisi API key."""
+
+    id: str = Field(..., examples=["nvidia"])
+    name: str = Field(..., examples=["NVIDIA AI"])
+    configured: bool = Field(..., description="True jika kredensial minimal (API key/model) sudah diset.")
+    available: bool = Field(..., description="True jika health check nyata ke provider berhasil.")
+    is_default: bool = Field(default=False, description="True jika ini AI_PROVIDER saat ini.")
+    is_fallback: bool = Field(default=False, description="True jika ini AI_FALLBACK_PROVIDER saat ini.")
+    active_model: str = Field(default="", description="Model default provider ini (dari environment).")
+    detail: str = Field(default="", description="Keterangan singkat status, aman ditampilkan ke user.")
+
+
+class AIProvidersResponse(BaseModel):
+    """Body response untuk GET /api/ai/providers."""
+
+    providers: list[AIProviderInfo]
+    fallback_enabled: bool
+
+
+class AIModelsResponse(BaseModel):
+    """Body response untuk GET /api/ai/models?provider=..."""
+
+    provider: str
+    models: list[str]
+    source: str = Field(
+        ...,
+        description=(
+            "'dynamic' jika daftar diambil langsung dari API provider, "
+            "'configured' jika dynamic discovery tidak tersedia dan hanya "
+            "model dari environment/configuration yang dikembalikan."
+        ),
+        examples=["dynamic", "configured"],
+    )

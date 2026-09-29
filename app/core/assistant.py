@@ -47,8 +47,9 @@ from app.llm.ollama_client import (
     ChatMessage,
     OllamaClient,
     OllamaError,
-    OllamaResponseError,
 )
+from app.llm.base import ProviderError, ProviderResponseError
+from app.llm.router import AIProviderRouter, ChatOutcome
 
 from app.services.web_search import (
     WebSearchError,
@@ -179,6 +180,27 @@ class Assistant:
             model=config.ollama.model,
             timeout_seconds=config.ollama.timeout_seconds,
         )
+
+        # =========================================================
+        # TAHAP 3 — AI PROVIDER ROUTER (NVIDIA / OpenRouter / Ollama)
+        # =========================================================
+        #
+        # self.client (OllamaClient di atas) TETAP dipakai langsung
+        # untuk hal-hal yang SENGAJA selalu lokal/ringan (system_info
+        # routing, search classifier di search_router.py) — lihat
+        # catatan module-level. Untuk balasan chat ke user, Assistant
+        # SELALU lewat ai_router di bawah ini, supaya provider yang
+        # dipakai (Ollama/NVIDIA/OpenRouter) mengikuti AI_PROVIDER dan
+        # bisa dipilih per-request dari Settings.
+
+        self.ai_router = AIProviderRouter(config, ollama_client=self.client)
+
+        # Metadata provider dari balasan TERAKHIR (diisi oleh ask() /
+        # ask_stream()). routes.py membaca ini untuk mengirim header
+        # X-Provider-Used / X-Provider-Requested / X-Fallback-Used,
+        # supaya fallback TIDAK PERNAH terjadi diam-diam tanpa
+        # pemberitahuan ke client (lihat BATASAN TAHAP 3).
+        self.last_chat_outcome: Optional[ChatOutcome] = None
 
         # =========================================================
         # TOOLS
@@ -547,6 +569,8 @@ class Assistant:
     def ask(
         self,
         user_input: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """
         Mengirim input user ke RIN dan mengembalikan jawaban.
@@ -561,9 +585,14 @@ class Assistant:
                 ↓
             jika system_info → tool
                 ↓
-            jika bukan → Ollama
+            jika bukan → AI Provider Router (Ollama/NVIDIA/OpenRouter)
                 ↓
             simpan SQLite
+
+        `provider`/`model` (TAHAP 3): opsional, override AI_PROVIDER /
+        model default untuk SATU permintaan ini saja (dikirim dari
+        Settings di frontend lewat ChatRequest). Jika None, dipakai
+        default dari environment (app/core/config.py::AIRouterConfig).
         """
 
         user_message = ChatMessage(
@@ -591,6 +620,7 @@ class Assistant:
 
             if tool_reply is not None:
                 reply = tool_reply
+                self.last_chat_outcome = None
 
             else:
                 (
@@ -601,21 +631,24 @@ class Assistant:
                     user_input
                 )
 
-                reply = self.client.chat(
-                    messages_for_llm
+                reply, outcome = self.ai_router.chat(
+                    messages_for_llm,
+                    provider_id=provider,
+                    model=model,
                 )
+                self.last_chat_outcome = outcome
 
                 if search_used:
                     reply = reply + format_sources_footer(
                         search_results
                     )
 
-        except OllamaError as exc:
-            # Jangan menyimpan user message jika Ollama gagal
+        except (OllamaError, ProviderError) as exc:
+            # Jangan menyimpan user message jika AI provider gagal
             self._history.pop()
 
             logger.error(
-                "Gagal mendapatkan balasan dari Ollama: %s",
+                "Gagal mendapatkan balasan dari AI provider: %s",
                 exc,
             )
 
@@ -672,6 +705,8 @@ class Assistant:
     def ask_stream(
         self,
         user_input: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Iterator[str]:
         """
         Streaming jawaban RIN.
@@ -680,7 +715,8 @@ class Assistant:
             hasil tool dikirim sebagai satu chunk.
 
         Untuk chat biasa:
-            menggunakan Ollama streaming.
+            menggunakan AI Provider Router (Ollama/NVIDIA/OpenRouter)
+            streaming. `provider`/`model` — lihat docstring ask().
         """
 
         user_message = ChatMessage(
@@ -705,6 +741,8 @@ class Assistant:
 
             if tool_reply is not None:
 
+                self.last_chat_outcome = None
+
                 reply_parts.append(
                     tool_reply
                 )
@@ -714,7 +752,7 @@ class Assistant:
             else:
 
                 # =================================================
-                # NORMAL OLLAMA STREAM (+ AUTOMATIC WEB SEARCH)
+                # NORMAL AI PROVIDER STREAM (+ AUTOMATIC WEB SEARCH)
                 # =================================================
 
                 (
@@ -725,9 +763,14 @@ class Assistant:
                     user_input
                 )
 
-                for chunk in self.client.chat_stream(
-                    messages_for_llm
-                ):
+                stream, outcome = self.ai_router.chat_stream(
+                    messages_for_llm,
+                    provider_id=provider,
+                    model=model,
+                )
+                self.last_chat_outcome = outcome
+
+                for chunk in stream:
                     reply_parts.append(
                         chunk
                     )
@@ -768,8 +811,8 @@ class Assistant:
 
             self._history.pop()
 
-            raise OllamaResponseError(
-                "Ollama mengembalikan balasan kosong."
+            raise ProviderResponseError(
+                "AI provider mengembalikan balasan kosong."
             )
 
         # =========================================================

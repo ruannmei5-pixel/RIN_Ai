@@ -430,13 +430,26 @@
           </div>
 
           <div class="settings-section">
-            <h3 class="section-label">AI</h3>
+            <h3 class="section-label">AI Provider</h3>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Provider</div>
+                <div class="settings-row-desc">NVIDIA AI, OpenRouter, atau Ollama (lokal).</div>
+              </div>
+              <select id="settingAiProvider" class="form-input settings-inline-input">
+                <option value="ollama">Ollama</option>
+                <option value="nvidia">NVIDIA AI</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            </div>
             <div class="settings-row">
               <div>
                 <div class="settings-row-label">Model</div>
-                <div class="settings-row-desc">Nama model Ollama (kosongkan untuk default server).</div>
+                <div class="settings-row-desc">Model dari provider terpilih (kosongkan untuk default server).</div>
               </div>
-              <input type="text" id="settingAiModel" class="form-input settings-inline-input" placeholder="mis. llama3.1">
+              <select id="settingAiModel" class="form-input settings-inline-input">
+                <option value="">(default server)</option>
+              </select>
             </div>
             <div class="settings-row">
               <div>
@@ -444,6 +457,24 @@
                 <div class="settings-row-desc" id="settingTemperatureValue">0.7</div>
               </div>
               <input type="range" id="settingAiTemperature" min="0" max="2" step="0.1" value="0.7" class="settings-slider">
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="settings-row-label">Use fallback provider</div>
+                <div class="settings-row-desc" id="settingAiFallbackDesc">Jika provider utama gagal, RIN memakai provider fallback ini.</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settingAiFallbackEnabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-label">Fallback provider</div>
+              <select id="settingAiFallbackProvider" class="form-input settings-inline-input">
+                <option value="ollama">Ollama</option>
+                <option value="nvidia">NVIDIA AI</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
             </div>
           </div>
 
@@ -457,6 +488,14 @@
               </span>
             </div>
             <div class="settings-row">
+              <div class="settings-row-label">NVIDIA AI</div>
+              <span class="status-pill" id="settingNvidiaStatus">Tidak diketahui</span>
+            </div>
+            <div class="settings-row">
+              <div class="settings-row-label">OpenRouter</div>
+              <span class="status-pill" id="settingOpenRouterStatus">Tidak diketahui</span>
+            </div>
+            <div class="settings-row">
               <div class="settings-row-label">Ollama</div>
               <span class="status-pill" id="settingOllamaStatus">Tidak diketahui</span>
             </div>
@@ -466,6 +505,7 @@
             </div>
           </div>
         </section>
+
 
       </div>
     </div>
