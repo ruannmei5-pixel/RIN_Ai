@@ -94,7 +94,7 @@ def _map_provider_error(exc: ProviderError) -> Tuple[int, str]:
     """
     TAHAP 3: sama seperti _map_ollama_error() di atas, tapi untuk
     ProviderError yang dinormalisasi lintas provider (Ollama/NVIDIA/
-    OpenRouter — lihat app/llm/base.py). Dipakai supaya /api/chat dan
+    — lihat app/llm/base.py). Dipakai supaya /api/chat dan
     /api/chat/stream memetakan status HTTP dengan cara yang SAMA untuk
     provider mana pun yang dipakai.
     """
@@ -362,7 +362,6 @@ def toggle_plugin(name: str, payload: PluginToggleRequest, request: Request):
 _PROVIDER_DISPLAY_NAMES = {
     "ollama": "Ollama",
     "nvidia": "NVIDIA AI",
-    "openrouter": "OpenRouter",
 }
 
 
@@ -371,7 +370,7 @@ def list_ai_providers(request: Request) -> AIProvidersResponse:
     """
     GET /api/ai/providers
 
-    Melaporkan ketiga provider (Ollama/NVIDIA/OpenRouter) apa adanya:
+    Melaporkan ketiga provider (Ollama/NVIDIA/) apa adanya:
     - `configured`: kredensial minimal (API key untuk cloud, host+model
       untuk Ollama) sudah diset.
     - `available`: hasil health check NYATA (bukan diasumsikan "online"
@@ -384,7 +383,7 @@ def list_ai_providers(request: Request) -> AIProvidersResponse:
     ai_router = assistant.ai_router
 
     providers = []
-    for provider_id in ("ollama", "nvidia", "openrouter"):
+    for provider_id in ("ollama", "nvidia", ):
         provider = ai_router.get(provider_id)
         health = provider.health_check()
         providers.append(
@@ -409,10 +408,10 @@ def list_ai_providers(request: Request) -> AIProvidersResponse:
 @router.get("/ai/models", response_model=AIModelsResponse)
 def list_ai_models(provider: str, request: Request):
     """
-    GET /api/ai/models?provider=nvidia|openrouter|ollama
+    GET /api/ai/models?provider=nvidi|ollama
 
     Dynamic model discovery jika provider mendukungnya (GET .../models
-    untuk NVIDIA/OpenRouter, GET .../api/tags untuk Ollama). Jika
+    untuk NVIDIA/, GET .../api/tags untuk Ollama). Jika
     dynamic discovery gagal/tidak tersedia, fallback ke SATU model dari
     environment/configuration (source="configured"), BUKAN daftar yang
     di-hardcode di kode.
@@ -428,7 +427,7 @@ def list_ai_models(provider: str, request: Request):
             status_code=404,
             content={
                 "error": f"Provider '{provider}' tidak dikenal. "
-                f"Gunakan salah satu: ollama, nvidia, openrouter."
+                f"Gunakan salah satu: ollama, nvidia."
             },
         )
 

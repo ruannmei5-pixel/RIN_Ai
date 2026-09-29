@@ -268,8 +268,7 @@ class OllamaClient:
                 response = self._client.chat(
                     model=active_model,
                     messages=payload,
-                    stream=False,
-                    think_disabled = False
+                    stream=False
                 )
 
             except Exception as exc:
@@ -369,15 +368,13 @@ class OllamaClient:
             {"role": message.role, "content": message.content}
             for message in messages
         ]
-        think_disabled = True
         try:
             response = self._client.chat(
                 model=self.model,
                 messages=payload,
                 tools=tools,
                 think=False,
-                stream=False,
-                think_disabled = True
+                stream=False
             )
         except TypeError:
             try:
@@ -385,8 +382,7 @@ class OllamaClient:
                     model=self.model,
                     messages=payload,
                     tools=tools,
-                    stream=False,
-                    think_disabled = False
+                    stream=False
                 )
             except Exception as exc:
                 logger.warning("Tool-call decision gagal (compat lama): %s", exc)
@@ -472,8 +468,7 @@ class OllamaClient:
                 model=active_model,
                 messages=payload,
                 think=False,
-                stream=True,
-                think_disabled = True
+                stream=True
             )
 
         except TypeError:
@@ -485,8 +480,7 @@ class OllamaClient:
                 stream = self._client.chat(
                     model=active_model,
                     messages=payload,
-                    stream=True,
-                    think_disabled = False
+                    stream=True
                 )
 
             except Exception as exc:

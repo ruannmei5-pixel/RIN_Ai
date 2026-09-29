@@ -502,8 +502,18 @@ class Assistant:
         if web_search_config is None or not web_search_config.enabled:
             return self._history, False, []
 
+        # OPTIMASI LATENSI: classifier LLM (request Ollama ekstra sebelum
+        # jawaban utama) HANYA dipakai jika diaktifkan eksplisit lewat
+        # web_search.llm_classifier / SEARCH_ROUTER_LLM_CLASSIFIER.
+        # Default: client=None -> keputusan search murni rule lokal (~0ms).
+        classifier_client = (
+            self.client
+            if getattr(web_search_config, "llm_classifier", False)
+            else None
+        )
+
         try:
-            if not needs_web_search(user_input, self.client):
+            if not needs_web_search(user_input, classifier_client):
                 return self._history, False, []
         except Exception as exc:  # pragma: no cover - jaring pengaman
             logger.warning(
