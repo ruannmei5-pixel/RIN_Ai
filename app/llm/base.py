@@ -4,12 +4,12 @@ base.py
 TAHAP 3 — MULTI AI PROVIDER.
 
 Abstraction layer seragam untuk semua AI inference provider yang
-didukung RIN (Ollama, NVIDIA AI, OpenRouter).
+didukung RIN (Ollama, NVIDIA AI, ).
 
 Kenapa modul ini dibuat:
 - Sebelum TAHAP 3, seluruh RIN (assistant.py, search_router.py, dsb)
   bicara LANGSUNG ke `OllamaClient` (app/llm/ollama_client.py).
-- Supaya bisa menambah NVIDIA AI & OpenRouter TANPA mengubah struktur
+- Supaya bisa menambah NVIDIA AI TANPA mengubah struktur
   response di seluruh aplikasi, semua provider (termasuk Ollama)
   sekarang diakses lewat interface `AIProvider` yang sama:
 
@@ -21,9 +21,7 @@ Kenapa modul ini dibuat:
 
 - Response SUDAH dinormalisasi di layer provider masing-masing
   (lihat app/llm/providers/*.py): caller (Assistant, routes.py) tidak
-  pernah perlu tahu apakah balasan datang dari Ollama, NVIDIA, atau
-  OpenRouter — bentuknya selalu `str` untuk chat() dan `Iterator[str]`
-  untuk chat_stream().
+  pernah perlu tahu apakah balasan datang dari Ollama, NVIDIA.
 
 - Error dari ketiga provider juga dinormalisasi ke satu hierarchy
   `ProviderError` di bawah, supaya app/api/routes.py bisa memetakan
@@ -119,8 +117,8 @@ class AIProvider(ABC):
     """
     Interface seragam untuk satu AI inference provider.
 
-    Implementasi konkret: OllamaProvider, NvidiaProvider,
-    OpenRouterProvider (lihat app/llm/providers/).
+    Implementasi konkret: OllamaProvider, NvidiaProvider
+    (lihat app/llm/providers/).
     """
 
     #: id pendek, dipakai di config/env (AI_PROVIDER) dan endpoint API.
@@ -160,7 +158,7 @@ class AIProvider(ABC):
     def health_check(self) -> ProviderHealth:
         """
         Default health check: hanya melaporkan `is_configured()`.
-        Provider yang bisa dites nyata (Ollama, NVIDIA, OpenRouter)
+        Provider yang bisa dites nyata (Ollama, NVIDIA )
         override method ini.
         """
         configured = self.is_configured()

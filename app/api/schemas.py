@@ -39,7 +39,7 @@ class ChatRequest(BaseModel):
         default=None,
         description=(
             "TAHAP 3: override AI provider untuk request ini saja "
-            "('ollama' | 'nvidia' | 'openrouter'). Opsional — jika kosong, "
+            "('ollama' | 'nvidia'). Opsional — jika kosong, "
             "dipakai AI_PROVIDER dari environment. Endpoint lama yang "
             "tidak mengirim field ini tetap kompatibel."
         ),
