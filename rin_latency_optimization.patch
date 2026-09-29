@@ -1,0 +1,1246 @@
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/.env.example RIN/.env.example
+--- a/RIN/.env.example	2026-09-29 02:12:22.000000000 +0000
++++ b/RIN/.env.example	2026-09-29 02:44:09.709668399 +0000
+@@ -56,8 +56,24 @@
+ NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+ NVIDIA_MODEL=nemotron-3-ultra-550b-a55b
+ 
++# Batas tunggu NVIDIA sebelum fallback ke Ollama (detik).
++# NVIDIA_TIMEOUT_SECONDS  = batas tunggu token pertama / jeda antar chunk
++#                           (default 25, rentang 5-120)
++# NVIDIA_CONNECT_TIMEOUT_SECONDS = batas membuka koneksi (default 5)
++NVIDIA_TIMEOUT_SECONDS=25
++NVIDIA_CONNECT_TIMEOUT_SECONDS=5
++
+ # --- Ollama (lokal — fallback) ---------------------------------------------
+ # Default dibaca dari config/config.json (ollama.host / ollama.model).
+ # Dua baris di bawah OPSIONAL: jika diisi, nilainya menimpa config.json.
+ OLLAMA_BASE_URL=http://localhost:11434
+ OLLAMA_MODEL=qwen3:4b
++
++# ---------------------------------------------------------------------
++# SEARCH ROUTER
++# ---------------------------------------------------------------------
++# Default false: keputusan "perlu web search atau tidak" dibuat oleh rule
++# lokal (instan), TANPA request LLM tambahan. Ubah ke true hanya jika ingin
++# classifier LLM (Ollama lokal) untuk pesan yang tidak cocok aturan apa pun
++# -- akurasi sedikit lebih baik, tapi menambah satu request sebelum jawaban.
++SEARCH_ROUTER_LLM_CLASSIFIER=false
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/core/assistant.py RIN/app/core/assistant.py
+--- a/RIN/app/core/assistant.py	2026-09-29 02:12:13.000000000 +0000
++++ b/RIN/app/core/assistant.py	2026-09-29 02:44:09.709297561 +0000
+@@ -502,8 +502,18 @@
+         if web_search_config is None or not web_search_config.enabled:
+             return self._history, False, []
+ 
++        # OPTIMASI LATENSI: classifier LLM (request Ollama ekstra sebelum
++        # jawaban utama) HANYA dipakai jika diaktifkan eksplisit lewat
++        # web_search.llm_classifier / SEARCH_ROUTER_LLM_CLASSIFIER.
++        # Default: client=None -> keputusan search murni rule lokal (~0ms).
++        classifier_client = (
++            self.client
++            if getattr(web_search_config, "llm_classifier", False)
++            else None
++        )
++
+         try:
+-            if not needs_web_search(user_input, self.client):
++            if not needs_web_search(user_input, classifier_client):
+                 return self._history, False, []
+         except Exception as exc:  # pragma: no cover - jaring pengaman
+             logger.warning(
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/core/config.py RIN/app/core/config.py
+--- a/RIN/app/core/config.py	2026-09-29 02:11:47.000000000 +0000
++++ b/RIN/app/core/config.py	2026-09-29 02:42:40.498448509 +0000
+@@ -73,6 +73,11 @@
+     enabled: bool = True
+     max_results: int = 3
+     timeout_seconds: int = 8
++    # OPTIMASI LATENSI: classifier LLM untuk kasus ambigu di
++    # search_router.py DEFAULT MATI. Jika True, pesan yang tidak cocok
++    # keyword apa pun akan memicu satu request LLM ekstra (Ollama lokal)
++    # SEBELUM jawaban utama. Override lewat env SEARCH_ROUTER_LLM_CLASSIFIER.
++    llm_classifier: bool = False
+ 
+ 
+ @dataclass
+@@ -88,6 +93,12 @@
+     api_key: str = ""
+     base_url: str = ""
+     model: str = ""
++    # OPTIMASI LATENSI: batas tunggu NVIDIA sebelum fallback ke Ollama.
++    # timeout_seconds  = batas tunggu token pertama / jeda antar chunk
++    # connect_timeout_seconds = batas membuka koneksi
++    # Env: NVIDIA_TIMEOUT_SECONDS, NVIDIA_CONNECT_TIMEOUT_SECONDS
++    timeout_seconds: float = 25.0
++    connect_timeout_seconds: float = 5.0
+ 
+ 
+ @dataclass
+@@ -182,6 +193,10 @@
+             enabled=bool(raw_web_search.get("enabled", True)),
+             max_results=int(raw_web_search.get("max_results", 3)),
+             timeout_seconds=int(raw_web_search.get("timeout_seconds", 8)),
++            llm_classifier=_env_bool(
++                "SEARCH_ROUTER_LLM_CLASSIFIER",
++                bool(raw_web_search.get("llm_classifier", False)),
++            ),
+         )
+ 
+         ai_config = _load_ai_router_config()
+@@ -248,9 +263,33 @@
+     )
+ 
+ 
++def _env_bool(name: str, default: bool) -> bool:
++    raw = os.getenv(name, "").strip().lower()
++    if not raw:
++        return default
++    return raw in ("1", "true", "yes", "on")
++
++
++def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
++    """Baca float dari env; nilai kosong/tidak valid -> default, lalu di-clamp."""
++    raw = os.getenv(name, "").strip()
++    if not raw:
++        return default
++    try:
++        value = float(raw)
++    except ValueError:
++        logger.warning("%s=%r bukan angka, memakai default %s.", name, raw, default)
++        return default
++    return max(minimum, min(maximum, value))
++
++
+ def _load_nvidia_config() -> "NvidiaConfig":
+     return NvidiaConfig(
+         api_key=os.getenv("NVIDIA_API_KEY", "").strip(),
+         base_url=os.getenv("NVIDIA_BASE_URL", "").strip().rstrip("/"),
+         model=os.getenv("NVIDIA_MODEL", "").strip(),
++        timeout_seconds=_env_float("NVIDIA_TIMEOUT_SECONDS", 25.0, 5.0, 120.0),
++        connect_timeout_seconds=_env_float(
++            "NVIDIA_CONNECT_TIMEOUT_SECONDS", 5.0, 1.0, 30.0
++        ),
+     )
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/core/search_router.py RIN/app/core/search_router.py
+--- a/RIN/app/core/search_router.py	2026-09-13 09:13:43.000000000 +0000
++++ b/RIN/app/core/search_router.py	2026-09-29 02:44:00.847498701 +0000
+@@ -4,45 +4,34 @@
+ Smart Search Detection untuk RIN (AUTOMATIC WEB SEARCH FEATURE).
+ 
+ Menentukan apakah sebuah pesan user membutuhkan web search sebelum
+-dijawab, memakai pendekatan HYBRID:
++dijawab. Keputusan dibuat SECARA LOKAL DAN INSTAN (rule/keyword, ~0ms):
+ 
+-    1. RULE/KEYWORD (cepat, gratis, deterministic)
+-       - Kasus yang jelas butuh search (berita, harga, cuaca, jadwal,
+-         hasil pertandingan, jabatan orang saat ini, versi terbaru,
+-         dst) -> langsung True, TANPA memanggil Ollama sama sekali.
+-       - Kasus yang jelas TIDAK butuh search (matematika, konsep,
+-         brainstorming, menulis/rewriting, coding dasar) -> langsung
+-         False, TANPA memanggil Ollama sama sekali.
+-
+-    2. LLM CLASSIFIER RINGAN (untuk kasus ambigu saja)
+-       - Hanya dipanggil jika kedua daftar keyword di atas TIDAK
+-         cocok sama sekali.
+-       - Satu pertanyaan singkat ke Ollama ("YA"/"TIDAK" saja),
+-         non-streaming, dengan fallback AMAN (anggap TIDAK butuh
+-         search) jika classifier gagal/timeout/format aneh, supaya
+-         chat biasa tidak pernah ikut gagal hanya karena langkah
+-         opsional ini.
+-
+-TRADE-OFF PERFORMA (lihat juga README/jawaban):
+-    - Rule/keyword: ~0ms overhead, tapi tidak selalu akurat untuk
+-      kalimat yang tidak memakai keyword baku.
+-    - LLM classifier: akurasi lebih baik untuk kasus ambigu, TAPI
+-      menambah satu roundtrip ke Ollama (biasanya <1-3 detik untuk
+-      model kecil seperti qwen3:4b) SEBELUM jawaban utama mulai
+-      di-generate/streaming. Karena itu, LLM classifier HANYA dipakai
+-      sebagai fallback untuk kasus yang benar-benar ambigu, bukan
+-      untuk setiap pesan.
++    1. STRONG keyword (berita, harga, cuaca, skor, jabatan saat ini,
++       versi terbaru, dst)                      -> True
++    2. NEVER keyword (konsep, coding, matematika, menulis)  -> False
++    3. WEAK keyword (kata waktu seperti "sekarang"/"hari ini"/tahun
++       2026) HANYA jika disertai kata tanya info (siapa/berapa/kapan/
++       kondisi/status/...)                      -> True
++    4. Selain itu (pertanyaan biasa/obrolan)    -> False
++
++OPTIMASI LATENSI: tidak ada request LLM untuk pertanyaan biasa.
++Sebelumnya, pesan yang tidak cocok keyword apa pun memicu satu request
++ke Ollama (classifier YA/TIDAK) SEBELUM jawaban utama dimulai. Sekarang
++classifier itu HANYA berjalan jika caller memberikan `client` secara
++eksplisit (lihat config.web_search.llm_classifier / env
++SEARCH_ROUTER_LLM_CLASSIFIER, default MATI). Fungsi
++`_ask_llm_classifier` tetap ada sebagai opsi.
+ 
+ Modul ini SENGAJA tidak pernah melempar exception ke caller
+ (app/core/assistant.py): kegagalan apa pun pada langkah opsional ini
+ selalu menghasilkan `False` (tidak melakukan search), supaya chat
+-biasa tetap berjalan seperti biasa (lihat ATURAN PENTING: jangan
+-membuat search dilakukan pada semua pertanyaan, dan jangan membuat
+-RIN crash).
++biasa tetap berjalan (jangan membuat search dilakukan pada semua
++pertanyaan, dan jangan membuat RIN crash).
+ """
+ 
+ from __future__ import annotations
+ 
++import re
+ from typing import Optional
+ 
+ from app.core.logger import get_logger
+@@ -52,14 +41,12 @@
+ 
+ 
+ # ============================================================
+-# KEYWORD: JELAS BUTUH SEARCH
++# KEYWORD: JELAS BUTUH SEARCH (STRONG)
+ # ============================================================
+ 
+-_ALWAYS_SEARCH_KEYWORDS: tuple[str, ...] = (
++_STRONG_SEARCH_KEYWORDS: tuple[str, ...] = (
++    # --- perilaku lama (dipertahankan) ---
+     "terbaru",
+-    "hari ini",
+-    "sekarang",
+-    "saat ini",
+     "kondisi terkini",
+     "cuaca",
+     "berita",
+@@ -84,8 +71,105 @@
+     "saham",
+     "harga tiket",
+     "jam tayang",
++    # --- tambahan (pengganti classifier LLM untuk kasus umum) ---
++    "terkini",
++    "kabar terbaru",
++    "breaking news",
++    "klasemen",
++    "hasil liga",
++    "jadwal liga",
++    "jadwal bola",
++    "ramalan cuaca",
++    "prakiraan cuaca",
++    "curah hujan",
++    "ihsg",
++    "bitcoin",
++    "kripto",
++    "crypto",
++    "siapa ceo",
++    "siapa direktur",
++    "siapa gubernur",
++    "siapa menteri",
++    "siapa ketua",
++    "siapa pemenang",
++    "kapan rilis",
++    "tanggal rilis",
++    "release date",
++    "release notes",
++    "changelog",
++    "latest",
++    "news",
++    "weather",
++    "stock price",
++    "exchange rate",
++    "who won",
++    "who is the current",
++)
++
++# ============================================================
++# KEYWORD: BUTUH SEARCH HANYA JIKA ADA KATA TANYA INFO (WEAK)
++# ============================================================
++#
++# Kata waktu seperti "hari ini"/"sekarang" sering muncul di obrolan
++# biasa ("aku capek hari ini", "buat kodenya sekarang"), jadi tidak
++# cukup sendirian untuk memicu search (yang menambah latensi Tavily).
++
++_WEAK_TIME_KEYWORDS: tuple[str, ...] = (
++    "hari ini",
++    "sekarang",
++    "saat ini",
++    "kini",
++    "minggu ini",
++    "bulan ini",
++    "tahun ini",
++    "kemarin",
++    "semalam",
++    "tadi malam",
++)
++
++_INFO_QUESTION_CUES: tuple[str, ...] = (
++    "siapa",
++    "berapa",
++    "kapan",
++    "kondisi",
++    "status",
++    "update",
++    "info",
++    "perkembangan",
++    "daftar",
++    "rekomendasi",
++    "jadwal",
++    "hasil",
++    "terlaris",
++    "terbaik",
++    "who",
++    "when",
++    "how much",
+ )
+ 
++# Tahun 2025+ juga dianggap kata waktu lemah.
++_YEAR_PATTERN = r"20(?:2[5-9]|[3-9]\d)"
++
++
++def _compile_keywords(keywords: tuple[str, ...], extra: str = "") -> "re.Pattern[str]":
++    """
++    Regex batas-kata untuk daftar keyword (multi-kata didukung).
++
++    Awalan Indonesia yang membuat arti berubah ("menghargai", "berharga",
++    "skoring") TIDAK cocok, tapi akhiran umum (-nya/-lah/-kah) tetap cocok
++    ("harganya", "beritanya").
++    """
++    ordered = sorted(keywords, key=len, reverse=True)
++    body = "|".join(re.escape(keyword) for keyword in ordered)
++    if extra:
++        body = f"{body}|{extra}" if body else extra
++    return re.compile(rf"(?<!\w)(?:{body})(?:nya|lah|kah)?(?!\w)")
++
++
++_STRONG_RE = _compile_keywords(_STRONG_SEARCH_KEYWORDS)
++_WEAK_TIME_RE = _compile_keywords(_WEAK_TIME_KEYWORDS, extra=_YEAR_PATTERN)
++_INFO_CUE_RE = _compile_keywords(_INFO_QUESTION_CUES)
++
+ # ============================================================
+ # KEYWORD: JELAS TIDAK BUTUH SEARCH
+ # ============================================================
+@@ -199,9 +283,11 @@
+ 
+     Args:
+         text: pesan user.
+-        client: OllamaClient untuk classifier LLM pada kasus ambigu.
+-            Jika None, kasus ambigu dianggap TIDAK butuh search (fail
+-            safe, tanpa memanggil Ollama sama sekali).
++        client: OPSIONAL. OllamaClient untuk classifier LLM pada kasus
++            yang tidak cocok aturan apa pun. Default None -> pertanyaan
++            biasa dianggap TIDAK butuh search, tanpa request LLM
++            apa pun (jalur cepat). Assistant hanya mengirim client jika
++            web_search.llm_classifier diaktifkan.
+     """
+ 
+     if not text or not text.strip():
+@@ -210,11 +296,11 @@
+     text_lower = text.lower()
+ 
+     # --------------------------------------------------------
+-    # 1. RULE: jelas butuh search
++    # 1. RULE: jelas butuh search (STRONG)
+     # --------------------------------------------------------
+ 
+-    if _contains_any(text_lower, _ALWAYS_SEARCH_KEYWORDS):
+-        logger.info("SEARCH_ROUTER: keyword(always) -> True | text=%r", text[:80])
++    if _STRONG_RE.search(text_lower):
++        logger.info("SEARCH_ROUTER: keyword(strong) -> True | text=%r", text[:80])
+         return True
+ 
+     # --------------------------------------------------------
+@@ -226,12 +312,23 @@
+         return False
+ 
+     # --------------------------------------------------------
+-    # 3. AMBIGU: LLM classifier ringan (opsional)
++    # 3. RULE: kata waktu (weak) + kata tanya info
++    # --------------------------------------------------------
++
++    if _WEAK_TIME_RE.search(text_lower) and _INFO_CUE_RE.search(text_lower):
++        logger.info("SEARCH_ROUTER: keyword(time+question) -> True | text=%r", text[:80])
++        return True
++
++    # --------------------------------------------------------
++    # 4. PERTANYAAN BIASA
+     # --------------------------------------------------------
++    #
++    # Default: TIDAK search dan TIDAK ada request LLM tambahan.
++    # Classifier LLM hanya jika caller memberikan `client` (opt-in).
+ 
+     if client is None:
+         logger.info(
+-            "SEARCH_ROUTER: ambigu tanpa classifier -> False | text=%r",
++            "SEARCH_ROUTER: pertanyaan biasa -> False (tanpa LLM) | text=%r",
+             text[:80],
+         )
+         return False
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/llm/ollama_client.py RIN/app/llm/ollama_client.py
+--- a/RIN/app/llm/ollama_client.py	2026-09-27 10:32:55.000000000 +0000
++++ b/RIN/app/llm/ollama_client.py	2026-09-29 02:43:16.647574379 +0000
+@@ -144,16 +144,55 @@
+             → keluarkan sebagai jawaban final
+     """
+ 
+-    def __init__(self) -> None:
++    def __init__(self, passthrough_if_no_think: bool = False) -> None:
+         self.buffer = ""
+         self.finished_thinking = False
+ 
++        # OPTIMASI LATENSI (streaming Ollama):
++        # Jika request dikirim dengan think=False, model TIDAK menulis
++        # blok reasoning, jadi tag </think> tidak akan pernah muncul.
++        # Tanpa opsi ini, filter menahan SELURUH jawaban sampai stream
++        # selesai (finish()) sehingga token pertama baru tampil setelah
++        # generasi penuh -> fallback Ollama tidak benar-benar streaming.
++        #
++        # Dengan opsi ini: begitu ada karakter non-spasi pertama yang
++        # jelas BUKAN awal "<think>", stream diteruskan langsung. Jika
++        # jawaban memang diawali "<think", perilaku lama (tahan sampai
++        # </think>) tetap dipakai.
++        self.passthrough_if_no_think = passthrough_if_no_think
++        self._passthrough = False
++
++    def _starts_like_think(self, text: str) -> bool:
++        head = text.lstrip().lower()
++        if not head:
++            return True  # belum ada karakter non-spasi: tunda keputusan
++        tag = "<think>"
++        return head.startswith("<think") or tag.startswith(head)
++
+     def feed(self, chunk: str) -> str:
+         if not chunk:
+             return ""
+ 
+         self.buffer += chunk
+ 
++        if self._passthrough:
++            result = self.buffer
++            self.buffer = ""
++            return result
++
++        if (
++            self.passthrough_if_no_think
++            and not self.finished_thinking
++            and not self._starts_like_think(self.buffer)
++        ):
++            self._passthrough = True
++            result = self.buffer.lstrip()
++            self.buffer = ""
++            return result
++
++        return self._feed_buffered()
++
++    def _feed_buffered(self) -> str:
+         # ----------------------------------------------------
+         # Kalau reasoning sudah selesai
+         # ----------------------------------------------------
+@@ -199,7 +238,7 @@
+         seluruh buffer sebagai jawaban agar RIN tidak blank.
+         """
+ 
+-        if self.finished_thinking:
++        if self.finished_thinking or self._passthrough:
+             result = self.buffer
+             self.buffer = ""
+             return result
+@@ -472,6 +511,10 @@
+             for message in messages
+         ]
+ 
++        # True hanya jika client Ollama menerima think=False (client lama
++        # yang belum mengenal parameter ini tetap memakai filter penuh).
++        think_disabled = True
++
+         try:
+ 
+             stream = self._client.chat(
+@@ -483,6 +526,8 @@
+ 
+         except TypeError:
+ 
++            think_disabled = False
++
+             try:
+ 
+                 stream = self._client.chat(
+@@ -521,7 +566,9 @@
+         # THINKING FILTER
+         # ----------------------------------------------------
+ 
+-        thinking_filter = ThinkingStreamFilter()
++        thinking_filter = ThinkingStreamFilter(
++            passthrough_if_no_think=think_disabled,
++        )
+ 
+         full_reply = ""
+ 
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/llm/providers/nvidia_provider.py RIN/app/llm/providers/nvidia_provider.py
+--- a/RIN/app/llm/providers/nvidia_provider.py	2026-09-29 02:11:34.000000000 +0000
++++ b/RIN/app/llm/providers/nvidia_provider.py	2026-09-29 02:45:29.725078540 +0000
+@@ -10,6 +10,8 @@
+     NVIDIA_API_KEY=
+     NVIDIA_BASE_URL=      (default: https://integrate.api.nvidia.com/v1)
+     NVIDIA_MODEL=
++    NVIDIA_TIMEOUT_SECONDS=            (default 25, batas tunggu token pertama)
++    NVIDIA_CONNECT_TIMEOUT_SECONDS=    (default 5)
+ 
+ API key HANYA dibaca dari environment (app/core/config.py), TIDAK
+ PERNAH di-hardcode di sini.
+@@ -17,6 +19,8 @@
+ 
+ from __future__ import annotations
+ 
++from typing import Any, Optional
++
+ from app.llm.providers.openai_compatible import OpenAICompatibleProvider
+ 
+ DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+@@ -26,10 +30,24 @@
+     id = "nvidia"
+     display_name = "NVIDIA AI"
+ 
+-    def __init__(self, api_key: str, base_url: str, model: str, timeout_seconds: int = 60) -> None:
++    def __init__(
++        self,
++        api_key: str,
++        base_url: str,
++        model: str,
++        timeout_seconds: float = 25.0,
++        connect_timeout_seconds: float = 5.0,
++        transport: Optional[Any] = None,
++    ) -> None:
++        # Default 25 detik (bukan 60): NVIDIA adalah provider cloud yang
++        # biasanya mengirim token pertama dalam hitungan detik. Jika lebih
++        # lama dari ini, lebih baik segera fallback ke Ollama (lihat
++        # app/llm/router.py) daripada membuat user menunggu.
+         super().__init__(
+             api_key=api_key,
+             base_url=base_url or DEFAULT_NVIDIA_BASE_URL,
+             model=model,
+             timeout_seconds=timeout_seconds,
++            connect_timeout_seconds=connect_timeout_seconds,
++            transport=transport,  # hanya untuk tes offline (httpx.MockTransport)
+         )
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/llm/providers/openai_compatible.py RIN/app/llm/providers/openai_compatible.py
+--- a/RIN/app/llm/providers/openai_compatible.py	2026-09-29 02:11:34.000000000 +0000
++++ b/RIN/app/llm/providers/openai_compatible.py	2026-09-29 02:42:52.330774284 +0000
+@@ -26,6 +26,8 @@
+ from __future__ import annotations
+ 
+ import json
++import threading
++import time
+ from typing import Any, Dict, Iterator, List, Optional
+ 
+ import httpx
+@@ -67,15 +69,60 @@
+         api_key: str,
+         base_url: str,
+         model: str,
+-        timeout_seconds: int = 60,
++        timeout_seconds: float = 25.0,
+         extra_headers: Optional[Dict[str, str]] = None,
++        connect_timeout_seconds: float = 5.0,
++        transport: Optional[httpx.BaseTransport] = None,
+     ) -> None:
+         self.api_key = (api_key or "").strip()
+         self.base_url = (base_url or "").rstrip("/")
+         self.model = (model or "").strip()
++        # timeout_seconds dipakai untuk DUA hal: batas tunggu byte
++        # berikutnya dari server (httpx read timeout) DAN batas total
++        # menunggu token pertama pada streaming. Setelah itu router
++        # (app/llm/router.py) fallback ke provider cadangan.
+         self.timeout_seconds = timeout_seconds
++        self.connect_timeout_seconds = connect_timeout_seconds
+         self._extra_headers = extra_headers or {}
+ 
++        # OPTIMASI LATENSI: satu httpx.Client dipakai ulang (connection
++        # pooling + keep-alive), sehingga TCP/TLS handshake ke API hanya
++        # terjadi sekali, bukan di setiap request seperti httpx.post()/
++        # httpx.stream() biasa. Dibuat lazy supaya konstruksi provider
++        # tidak membuka koneksi apa pun.
++        self._transport = transport
++        self._client: Optional[httpx.Client] = None
++        self._client_lock = threading.Lock()
++
++    def _timeout(self) -> httpx.Timeout:
++        return httpx.Timeout(
++            connect=self.connect_timeout_seconds,
++            read=self.timeout_seconds,
++            write=10.0,
++            pool=5.0,
++        )
++
++    def _get_client(self) -> httpx.Client:
++        if self._client is None:
++            with self._client_lock:
++                if self._client is None:
++                    self._client = httpx.Client(
++                        timeout=self._timeout(),
++                        limits=httpx.Limits(
++                            max_connections=10,
++                            max_keepalive_connections=5,
++                            keepalive_expiry=60.0,
++                        ),
++                        transport=self._transport,
++                    )
++        return self._client
++
++    def close(self) -> None:
++        """Menutup koneksi persisten (opsional; dipanggil saat shutdown)."""
++        client, self._client = self._client, None
++        if client is not None:
++            client.close()
++
+     # --------------------------------------------------------------
+     # CONFIG
+     # --------------------------------------------------------------
+@@ -125,15 +172,14 @@
+         }
+ 
+         try:
+-            response = httpx.post(
++            response = self._get_client().post(
+                 f"{self.base_url}/chat/completions",
+                 json=payload,
+                 headers=self._headers(),
+-                timeout=self.timeout_seconds,
+             )
+         except httpx.TimeoutException as exc:
+             raise ProviderTimeoutError(
+-                f"{self.display_name}: request melebihi {self.timeout_seconds} detik."
++                f"{self.display_name}: request melebihi {self.timeout_seconds:g} detik."
+             ) from exc
+         except httpx.RequestError as exc:
+             raise ProviderConnectionError(
+@@ -176,14 +222,14 @@
+         }
+ 
+         full_reply = ""
++        started_at = time.monotonic()
+ 
+         try:
+-            with httpx.stream(
++            with self._get_client().stream(
+                 "POST",
+                 f"{self.base_url}/chat/completions",
+                 json=payload,
+                 headers=self._headers(),
+-                timeout=self.timeout_seconds,
+             ) as response:
+                 if response.status_code >= 400:
+                     # Baca body error (bukan stream) sebelum melempar.
+@@ -191,6 +237,18 @@
+                     self._raise_for_status(response)
+ 
+                 for line in response.iter_lines():
++                    # Batas total menunggu token pertama. httpx read
++                    # timeout saja tidak cukup: jika server terus
++                    # mengirim keep-alive/event kosong, read timeout
++                    # tidak pernah terpicu dan RIN menggantung.
++                    if (
++                        not full_reply
++                        and time.monotonic() - started_at > self.timeout_seconds
++                    ):
++                        raise ProviderTimeoutError(
++                            f"{self.display_name}: token pertama tidak tiba "
++                            f"dalam {self.timeout_seconds:g} detik."
++                        )
+                     if not line:
+                         continue
+                     if isinstance(line, bytes):
+@@ -221,7 +279,7 @@
+ 
+         except httpx.TimeoutException as exc:
+             raise ProviderTimeoutError(
+-                f"{self.display_name}: streaming timeout setelah {self.timeout_seconds} detik."
++                f"{self.display_name}: streaming timeout setelah {self.timeout_seconds:g} detik."
+             ) from exc
+         except httpx.RequestError as exc:
+             raise ProviderConnectionError(
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/app/llm/router.py RIN/app/llm/router.py
+--- a/RIN/app/llm/router.py	2026-09-29 02:12:13.000000000 +0000
++++ b/RIN/app/llm/router.py	2026-09-29 02:43:03.548708256 +0000
+@@ -35,6 +35,7 @@
+ 
+ from __future__ import annotations
+ 
++import time
+ from dataclasses import dataclass
+ from typing import Dict, Iterator, List, Optional, Tuple
+ 
+@@ -81,6 +82,8 @@
+                 api_key=config.nvidia.api_key,
+                 base_url=config.nvidia.base_url,
+                 model=config.nvidia.model,
++                timeout_seconds=config.nvidia.timeout_seconds,
++                connect_timeout_seconds=config.nvidia.connect_timeout_seconds,
+             ),
+             "ollama": OllamaProvider(shared_ollama_client),
+         }
+@@ -184,20 +187,24 @@
+         """
+         requested = self.resolve(provider_id)
+         provider = self._providers[requested]
++        started_at = time.monotonic()
+ 
+         try:
+             generator = provider.chat_stream(messages, model=model)
+             first_chunk: Optional[str] = next(generator, None)
+         except ProviderError as exc:
+             logger.warning(
+-                "AI_ROUTER: provider=%s gagal saat streaming (%s), cek fallback.",
++                "AI_ROUTER: provider=%s gagal saat streaming setelah %.2fs (%s), "
++                "cek fallback.",
+                 requested,
++                time.monotonic() - started_at,
+                 exc,
+             )
+             fallback_id = self._resolve_fallback(requested)
+             if fallback_id is None:
+                 raise
+             fallback_provider = self._providers[fallback_id]
++            fb_started_at = time.monotonic()
+             try:
+                 fb_generator = fallback_provider.chat_stream(messages)
+                 fb_first_chunk = next(fb_generator, None)
+@@ -209,9 +216,11 @@
+                 )
+                 raise
+             logger.info(
+-                "AI_ROUTER: fallback dipakai (stream). requested=%s used=%s",
++                "AI_ROUTER: fallback dipakai (stream). requested=%s used=%s "
++                "first_chunk=%.2fs",
+                 requested,
+                 fallback_id,
++                time.monotonic() - fb_started_at,
+             )
+ 
+             def _fallback_stream() -> Iterator[str]:
+@@ -221,6 +230,12 @@
+ 
+             return _fallback_stream(), ChatOutcome(fallback_id, requested, True)
+ 
++        logger.info(
++            "AI_ROUTER: provider=%s first_chunk=%.2fs",
++            requested,
++            time.monotonic() - started_at,
++        )
++
+         def _stream() -> Iterator[str]:
+             if first_chunk is not None:
+                 yield first_chunk
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/config/config.json RIN/config/config.json
+--- a/RIN/config/config.json	2026-09-27 10:39:59.000000000 +0000
++++ b/RIN/config/config.json	2026-09-29 02:44:09.709488465 +0000
+@@ -16,7 +16,8 @@
+     "web_search": {
+         "enabled": true,
+         "max_results": 3,
+-        "timeout_seconds": 8
++        "timeout_seconds": 8,
++        "llm_classifier": false
+     }
+ }
+ 
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/tests/test_latency_fastpath.py RIN/tests/test_latency_fastpath.py
+--- a/RIN/tests/test_latency_fastpath.py	1970-01-01 00:00:00.000000000 +0000
++++ b/RIN/tests/test_latency_fastpath.py	2026-09-29 02:44:43.856551553 +0000
+@@ -0,0 +1,282 @@
++"""
++test_latency_fastpath.py
++
++Membuktikan optimasi latensi RIN (semua OFFLINE, tanpa API key, tanpa
++menghubungi NVIDIA/Ollama/Tavily):
++
++  1. Pertanyaan biasa TIDAK memicu request LLM apa pun untuk memutuskan
++     perlu-web-search-atau-tidak (classifier hanya opt-in).
++  2. Pertanyaan yang butuh info web tetap terdeteksi.
++  3. Timeout NVIDIA default 25 detik dan bisa diatur lewat env.
++  4. Streaming Ollama meneruskan token langsung (tidak menahan seluruh
++     jawaban) saat think=False.
++
++Jalankan:
++
++    python -m pytest tests/test_latency_fastpath.py -v
++"""
++
++from __future__ import annotations
++
++from types import SimpleNamespace
++from typing import List
++
++import pytest
++
++from app.core.config import (
++    AIRouterConfig,
++    AppConfig,
++    NvidiaConfig,
++    OllamaConfig,
++    WebSearchConfig,
++    _load_nvidia_config,
++)
++from app.core.search_router import needs_web_search
++from app.llm.base import ChatMessage
++from app.llm.ollama_client import ThinkingStreamFilter
++from app.llm.router import AIProviderRouter
++
++
++class ExplodingClient:
++    """Classifier palsu: gagal keras jika ada yang memanggil LLM."""
++
++    def __init__(self) -> None:
++        self.calls = 0
++
++    def chat(self, messages, model=None):  # noqa: D401
++        self.calls += 1
++        raise AssertionError("LLM classifier tidak boleh dipanggil di jalur cepat")
++
++
++class RecordingClient:
++    def __init__(self, reply: str) -> None:
++        self.reply = reply
++        self.calls = 0
++
++    def chat(self, messages, model=None):
++        self.calls += 1
++        return self.reply
++
++
++# ------------------------------------------------------------ SEARCH ROUTER
++
++ORDINARY = [
++    "halo rin",
++    "jelaskan Python untuk pemula",
++    "buatkan konfigurasi mikrotik untuk vlan",
++    "aku capek hari ini",
++    "tolong buat kodenya sekarang",
++    "bagaimana cara belajar gitar?",
++    "apa rencanamu hari ini?",
++    "ceritakan lelucon",
++    "aku menghargai bantuanmu",
++    "skoring model ini gimana?",
++]
++
++
++@pytest.mark.parametrize("text", ORDINARY)
++def test_ordinary_question_makes_no_llm_call(text):
++    client = ExplodingClient()
++
++    # Jalur default Assistant: client=None.
++    assert needs_web_search(text) is False
++    assert needs_web_search(text, None) is False
++    assert client.calls == 0
++
++
++NEEDS_WEB = [
++    "siapa presiden indonesia sekarang?",
++    "berapa harga terbaru RTX 5070?",
++    "berapa harganya iPhone 17?",
++    "apa berita teknologi terbaru hari ini?",
++    "siapa yang memenangkan pertandingan tadi?",
++    "bagaimana cuaca di Bandung?",
++    "siapa CEO OpenAI sekarang?",
++    "berapa kurs dollar hari ini?",
++    "kapan rilis Python versi berikutnya?",
++    "what is the latest version of node",
++    "siapa juara piala dunia 2026?",
++    "bagaimana kondisi ekonomi Indonesia saat ini?",
++]
++
++
++@pytest.mark.parametrize("text", NEEDS_WEB)
++def test_web_questions_still_trigger_search(text):
++    assert needs_web_search(text) is True
++
++
++def test_never_keywords_still_block_weak_time_words():
++    assert needs_web_search("jelaskan apa itu VLAN sekarang") is False
++    assert needs_web_search("buatkan program python untuk menghitung luas lingkaran") is False
++
++
++def test_empty_text_is_false():
++    assert needs_web_search("") is False
++    assert needs_web_search("   ") is False
++
++
++def test_llm_classifier_is_opt_in_only():
++    ambiguous = "ceritakan tentang perusahaan itu"
++
++    # Tanpa client: tidak ada LLM call sama sekali.
++    assert needs_web_search(ambiguous) is False
++
++    # Dengan client eksplisit (opt-in): classifier dipakai TEPAT satu kali.
++    yes = RecordingClient("YA")
++    assert needs_web_search(ambiguous, yes) is True
++    assert yes.calls == 1
++
++    no = RecordingClient("TIDAK")
++    assert needs_web_search(ambiguous, no) is False
++
++
++def test_classifier_not_called_when_rules_decide():
++    client = ExplodingClient()
++    assert needs_web_search("berita terbaru hari ini", client) is True      # strong
++    assert needs_web_search("jelaskan apa itu VLAN", client) is False       # never
++    assert client.calls == 0
++
++
++def test_llm_classifier_failure_falls_back_to_false():
++    assert needs_web_search("ceritakan tentang perusahaan itu", ExplodingClient()) is False
++
++
++# ------------------------------------------------ ASSISTANT: JALUR CEPAT
++
++def _bare_assistant(llm_classifier: bool, client):
++    from app.core.assistant import Assistant
++
++    assistant = Assistant.__new__(Assistant)          # tanpa init berat (DB, dll)
++    assistant.config = SimpleNamespace(
++        web_search=WebSearchConfig(enabled=True, llm_classifier=llm_classifier)
++    )
++    assistant.client = client
++    assistant._history = [ChatMessage(role="user", content="jelaskan Python untuk pemula")]
++    return assistant
++
++
++def test_assistant_default_does_not_call_llm_before_main_request():
++    client = ExplodingClient()
++    assistant = _bare_assistant(llm_classifier=False, client=client)
++
++    messages, used, results = assistant._prepare_messages_with_optional_search(
++        "ceritakan tentang perusahaan itu"
++    )
++
++    assert client.calls == 0
++    assert used is False and results == []
++    assert messages is assistant._history
++
++
++def test_assistant_classifier_only_when_enabled():
++    client = RecordingClient("TIDAK")
++    assistant = _bare_assistant(llm_classifier=True, client=client)
++
++    assistant._prepare_messages_with_optional_search("ceritakan tentang perusahaan itu")
++
++    assert client.calls == 1
++
++
++# ------------------------------------------------------------ TIMEOUT NVIDIA
++
++def _clear_nvidia_env(monkeypatch):
++    for var in (
++        "NVIDIA_TIMEOUT_SECONDS",
++        "NVIDIA_CONNECT_TIMEOUT_SECONDS",
++    ):
++        monkeypatch.delenv(var, raising=False)
++
++
++def test_nvidia_timeout_defaults_are_20_to_30_seconds(monkeypatch):
++    _clear_nvidia_env(monkeypatch)
++    cfg = _load_nvidia_config()
++    assert 20 <= cfg.timeout_seconds <= 30
++    assert cfg.connect_timeout_seconds <= 10
++
++
++def test_nvidia_timeout_env_override_and_clamp(monkeypatch):
++    _clear_nvidia_env(monkeypatch)
++
++    monkeypatch.setenv("NVIDIA_TIMEOUT_SECONDS", "30")
++    assert _load_nvidia_config().timeout_seconds == 30
++
++    monkeypatch.setenv("NVIDIA_TIMEOUT_SECONDS", "9999")
++    assert _load_nvidia_config().timeout_seconds == 120
++
++    monkeypatch.setenv("NVIDIA_TIMEOUT_SECONDS", "bukan-angka")
++    assert _load_nvidia_config().timeout_seconds == 25
++
++
++def test_router_passes_configured_timeouts_to_nvidia_provider():
++    config = AppConfig(
++        assistant_name="RIN",
++        assistant_full_name="Responsive Intelligent Navigator",
++        language="id",
++        ollama=OllamaConfig("http://localhost:11434", "qwen3:4b"),
++        ai=AIRouterConfig("nvidia", True, "ollama"),
++        nvidia=NvidiaConfig(
++            "dummy-key",
++            "http://127.0.0.1:9/v1",
++            "dummy-model",
++            timeout_seconds=22,
++            connect_timeout_seconds=3,
++        ),
++    )
++    router = AIProviderRouter(config, ollama_client=object())
++    nvidia = router.get("nvidia")
++
++    assert nvidia.timeout_seconds == 22
++    assert nvidia.connect_timeout_seconds == 3
++    # Model NVIDIA tidak berubah.
++    assert nvidia.active_model == "dummy-model"
++
++
++def test_ollama_default_timeout_unchanged():
++    assert OllamaConfig("h", "m").timeout_seconds == 60
++
++
++# ------------------------------------------ STREAMING OLLAMA (think=False)
++
++def _feed_all(flt: ThinkingStreamFilter, chunks: List[str]) -> List[str]:
++    return [flt.feed(chunk) for chunk in chunks]
++
++
++def test_passthrough_streams_tokens_immediately_when_think_disabled():
++    flt = ThinkingStreamFilter(passthrough_if_no_think=True)
++
++    out = _feed_all(flt, ["Ha", "lo ", "dunia"])
++
++    # Token pertama langsung keluar, bukan menunggu stream selesai.
++    assert out == ["Ha", "lo ", "dunia"]
++    assert flt.finish() == ""
++
++
++def test_passthrough_skips_leading_whitespace_only_chunks():
++    flt = ThinkingStreamFilter(passthrough_if_no_think=True)
++
++    assert flt.feed("\n\n") == ""
++    assert flt.feed("Halo") == "Halo"
++
++
++def test_passthrough_still_filters_explicit_think_block():
++    flt = ThinkingStreamFilter(passthrough_if_no_think=True)
++
++    out = _feed_all(flt, ["<thi", "nk>rahasia ", "berpikir</think>", "\n\nJawaban", " final"])
++
++    assert "".join(out) == "\n\nJawaban final"
++    assert "rahasia" not in "".join(out)
++
++
++def test_legacy_mode_unchanged_buffers_until_finish():
++    flt = ThinkingStreamFilter()          # perilaku lama (client tanpa think=False)
++
++    assert _feed_all(flt, ["Ha", "lo"]) == ["", ""]
++    assert flt.finish() == "Halo"
++
++
++def test_legacy_mode_still_handles_untagged_reasoning():
++    flt = ThinkingStreamFilter()
++
++    out = _feed_all(flt, ["reasoning tanpa tag buka</think>", "Jawaban"])
++
++    assert "".join(out) == "Jawaban"
+diff -ruN '--exclude=logs' '--exclude=data' '--exclude=assets' /tmp/orig/RIN/tests/test_nvidia_streaming.py RIN/tests/test_nvidia_streaming.py
+--- a/RIN/tests/test_nvidia_streaming.py	1970-01-01 00:00:00.000000000 +0000
++++ b/RIN/tests/test_nvidia_streaming.py	2026-09-29 02:45:22.472550669 +0000
+@@ -0,0 +1,215 @@
++"""
++test_nvidia_streaming.py
++
++Menguji lapisan HTTP NVIDIA (app/llm/providers/openai_compatible.py)
++secara OFFLINE memakai httpx.MockTransport (tidak ada koneksi jaringan,
++tidak butuh API key):
++
++  - token pertama diteruskan segera (streaming, bukan menunggu semua)
++  - timeout token pertama -> ProviderTimeoutError -> fallback Ollama
++  - fallback hanya untuk request itu (NVIDIA tetap provider utama)
++  - httpx.Client dipakai ulang (keep-alive) antar request
++  - model NVIDIA yang dikirim tidak berubah
++
++Jalankan:
++
++    python -m pytest tests/test_nvidia_streaming.py -v
++"""
++
++from __future__ import annotations
++
++import json
++import time
++from typing import Iterator, List
++
++import pytest
++
++httpx = pytest.importorskip("httpx")
++
++from app.core.config import (  # noqa: E402
++    AIRouterConfig,
++    AppConfig,
++    NvidiaConfig,
++    OllamaConfig,
++)
++from app.llm.base import (  # noqa: E402
++    AIProvider,
++    ChatMessage,
++    ProviderAuthError,
++    ProviderTimeoutError,
++)
++from app.llm.providers.nvidia_provider import NvidiaProvider  # noqa: E402
++from app.llm.router import AIProviderRouter  # noqa: E402
++
++MSGS = [ChatMessage(role="user", content="hai")]
++MODEL = "nvidia/model-tes"
++
++
++def _sse(*pieces: str) -> bytes:
++    lines = []
++    for piece in pieces:
++        event = {"choices": [{"delta": {"content": piece}}]}
++        lines.append(f"data: {json.dumps(event)}\n\n")
++    lines.append("data: [DONE]\n\n")
++    return "".join(lines).encode("utf-8")
++
++
++def _provider(handler, timeout: float = 25.0) -> NvidiaProvider:
++    return NvidiaProvider(
++        api_key="dummy-key",
++        base_url="https://nvidia.test/v1",
++        model=MODEL,
++        timeout_seconds=timeout,
++        transport=httpx.MockTransport(handler),
++    )
++
++
++class _KeepAliveOnlyStream(httpx.SyncByteStream):
++    """Server yang terus mengirim keep-alive tapi tidak pernah mengirim token."""
++
++    def __iter__(self) -> Iterator[bytes]:
++        for _ in range(200):
++            time.sleep(0.05)
++            yield b": keep-alive\n"
++
++
++class _FakeOllama(AIProvider):
++    id = "ollama"
++    display_name = "ollama"
++
++    def __init__(self) -> None:
++        self.calls = 0
++
++    def chat(self, messages, model=None) -> str:
++        self.calls += 1
++        return "jawaban-ollama"
++
++    def chat_stream(self, messages, model=None) -> Iterator[str]:
++        self.calls += 1
++        yield "ollama-a"
++        yield "ollama-b"
++
++
++def _router(nvidia: NvidiaProvider):
++    config = AppConfig(
++        assistant_name="RIN",
++        assistant_full_name="Responsive Intelligent Navigator",
++        language="id",
++        ollama=OllamaConfig("http://localhost:11434", "qwen3:4b"),
++        ai=AIRouterConfig("nvidia", True, "ollama"),
++        nvidia=NvidiaConfig("dummy-key", "https://nvidia.test/v1", MODEL),
++    )
++    router = AIProviderRouter(config, ollama_client=object())
++    ollama = _FakeOllama()
++    router._providers["nvidia"] = nvidia
++    router._providers["ollama"] = ollama
++    return router, ollama
++
++
++# ---------------------------------------------------------------- STREAMING
++
++def test_stream_yields_chunks_in_order_and_sends_configured_model():
++    seen: List[dict] = []
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        seen.append(json.loads(request.content))
++        return httpx.Response(200, content=_sse("Ha", "lo", " dunia"))
++
++    provider = _provider(handler)
++    chunks = list(provider.chat_stream(MSGS))
++
++    assert chunks == ["Ha", "lo", " dunia"]
++    assert seen[0]["model"] == MODEL          # model NVIDIA tidak diganti
++    assert seen[0]["stream"] is True
++
++
++def test_first_chunk_is_available_before_stream_is_consumed():
++    def handler(request: httpx.Request) -> httpx.Response:
++        return httpx.Response(200, content=_sse("pertama", "kedua"))
++
++    generator = _provider(handler).chat_stream(MSGS)
++
++    assert next(generator) == "pertama"       # tanpa menunggu chunk berikutnya
++
++
++# --------------------------------------------------------- CLIENT PERSISTEN
++
++def test_http_client_is_reused_across_requests():
++    calls = {"n": 0}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        calls["n"] += 1
++        return httpx.Response(200, content=_sse("ok"))
++
++    provider = _provider(handler)
++    list(provider.chat_stream(MSGS))
++    first_client = provider._client
++    list(provider.chat_stream(MSGS))
++
++    assert first_client is not None
++    assert provider._client is first_client   # koneksi/keep-alive dipakai ulang
++    assert calls["n"] == 2
++
++    provider.close()
++    assert provider._client is None
++
++
++# ------------------------------------------------------------------ ERROR
++
++def test_auth_error_is_mapped():
++    provider = _provider(lambda request: httpx.Response(401, text="nope"))
++
++    with pytest.raises(ProviderAuthError):
++        list(provider.chat_stream(MSGS))
++
++
++def test_first_token_deadline_raises_timeout_even_with_keepalives():
++    def handler(request: httpx.Request) -> httpx.Response:
++        return httpx.Response(200, stream=_KeepAliveOnlyStream())
++
++    provider = _provider(handler, timeout=0.2)
++    started = time.monotonic()
++
++    with pytest.raises(ProviderTimeoutError):
++        list(provider.chat_stream(MSGS))
++
++    assert time.monotonic() - started < 2.0   # tidak menggantung
++
++
++# ----------------------------------------------------------------- FALLBACK
++
++def test_timeout_falls_back_to_ollama_for_that_request_only():
++    state = {"nvidia_down": True}
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        if state["nvidia_down"]:
++            raise httpx.ConnectTimeout("timeout", request=request)
++        return httpx.Response(200, content=_sse("nvidia-a", "nvidia-b"))
++
++    router, ollama = _router(_provider(handler))
++
++    stream, outcome = router.chat_stream(MSGS)
++    assert "".join(stream) == "ollama-aollama-b"
++    assert outcome.provider_used == "ollama"
++    assert outcome.provider_requested == "nvidia"
++    assert outcome.fallback_used is True
++
++    # Provider utama TIDAK berubah; request berikutnya mencoba NVIDIA lagi.
++    assert router.config.ai.provider == "nvidia"
++    state["nvidia_down"] = False
++    stream, outcome = router.chat_stream(MSGS)
++    assert "".join(stream) == "nvidia-anvidia-b"
++    assert outcome.provider_used == "nvidia" and outcome.fallback_used is False
++    assert ollama.calls == 1                  # Ollama hanya dipakai sekali
++
++
++def test_normal_request_never_touches_ollama():
++    router, ollama = _router(
++        _provider(lambda request: httpx.Response(200, content=_sse("a", "b")))
++    )
++
++    stream, outcome = router.chat_stream(MSGS)
++
++    assert "".join(stream) == "ab"
++    assert outcome.fallback_used is False
++    assert ollama.calls == 0
