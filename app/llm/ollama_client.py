@@ -132,21 +132,25 @@ def clean_thinking(text: str) -> str:
 
 class ThinkingStreamFilter:
     """
-    Filter streaming untuk memastikan reasoning tidak pernah
-    ditampilkan ke user.
+    Filter streaming agar reasoning tidak pernah tampil ke user.
 
-    Strategi:
-
-        sebelum </think>
-            → tahan semuanya
-
-        setelah </think>
-            → keluarkan sebagai jawaban final
+    Mode lama: tahan semuanya sampai </think>.
+    Mode passthrough (think=False): begitu ada karakter non-spasi pertama
+    yang jelas bukan awal "<think>", stream diteruskan langsung.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, passthrough_if_no_think: bool = False) -> None:
         self.buffer = ""
         self.finished_thinking = False
+        self.passthrough_if_no_think = passthrough_if_no_think
+        self._passthrough = False
+
+    def _starts_like_think(self, text: str) -> bool:
+        head = text.lstrip().lower()
+        if not head:
+            return True  # belum ada karakter non-spasi: tunda keputusan
+        tag = "<think>"
+        return head.startswith("<think") or tag.startswith(head)
 
     def feed(self, chunk: str) -> str:
         if not chunk:
@@ -154,62 +158,47 @@ class ThinkingStreamFilter:
 
         self.buffer += chunk
 
-        # ----------------------------------------------------
-        # Kalau reasoning sudah selesai
-        # ----------------------------------------------------
+        if self._passthrough:
+            result = self.buffer
+            self.buffer = ""
+            return result
 
+        if (
+            self.passthrough_if_no_think
+            and not self.finished_thinking
+            and not self._starts_like_think(self.buffer)
+        ):
+            self._passthrough = True
+            result = self.buffer.lstrip()
+            self.buffer = ""
+            return result
+
+        return self._feed_buffered()
+
+    def _feed_buffered(self) -> str:
         if self.finished_thinking:
             result = self.buffer
             self.buffer = ""
             return result
 
-        # ----------------------------------------------------
-        # Cari </think>
-        # ----------------------------------------------------
-
-        match = re.search(
-            r"</think>",
-            self.buffer,
-            flags=re.IGNORECASE,
-        )
+        match = re.search(r"</think>", self.buffer, flags=re.IGNORECASE)
 
         if match:
             self.finished_thinking = True
-
             result = self.buffer[match.end():]
-
             self.buffer = ""
-
             return result
-
-        # ----------------------------------------------------
-        # Jangan keluarkan apa pun selama thinking.
-        #
-        # Ini sengaja dilakukan supaya reasoning Qwen tidak
-        # pernah muncul di terminal.
-        # ----------------------------------------------------
 
         return ""
 
     def finish(self) -> str:
-        """
-        Dipanggil ketika stream selesai.
-
-        Kalau tidak pernah menemukan </think>, kita anggap
-        seluruh buffer sebagai jawaban agar RIN tidak blank.
-        """
-
-        if self.finished_thinking:
+        if self.finished_thinking or self._passthrough:
             result = self.buffer
             self.buffer = ""
             return result
 
-        # Tidak ada </think>.
-        # Bersihkan fallback.
         result = clean_thinking(self.buffer)
-
         self.buffer = ""
-
         return result
 
 
@@ -280,6 +269,7 @@ class OllamaClient:
                     model=active_model,
                     messages=payload,
                     stream=False,
+                    think_disabled = False
                 )
 
             except Exception as exc:
@@ -379,7 +369,7 @@ class OllamaClient:
             {"role": message.role, "content": message.content}
             for message in messages
         ]
-
+        think_disabled = True
         try:
             response = self._client.chat(
                 model=self.model,
@@ -387,6 +377,7 @@ class OllamaClient:
                 tools=tools,
                 think=False,
                 stream=False,
+                think_disabled = True
             )
         except TypeError:
             try:
@@ -395,6 +386,7 @@ class OllamaClient:
                     messages=payload,
                     tools=tools,
                     stream=False,
+                    think_disabled = False
                 )
             except Exception as exc:
                 logger.warning("Tool-call decision gagal (compat lama): %s", exc)
@@ -472,6 +464,8 @@ class OllamaClient:
             for message in messages
         ]
 
+        think_disabled = True
+
         try:
 
             stream = self._client.chat(
@@ -479,9 +473,12 @@ class OllamaClient:
                 messages=payload,
                 think=False,
                 stream=True,
+                think_disabled = True
             )
 
         except TypeError:
+
+            think_disabled = False 
 
             try:
 
@@ -489,6 +486,7 @@ class OllamaClient:
                     model=active_model,
                     messages=payload,
                     stream=True,
+                    think_disabled = False
                 )
 
             except Exception as exc:
@@ -521,7 +519,9 @@ class OllamaClient:
         # THINKING FILTER
         # ----------------------------------------------------
 
-        thinking_filter = ThinkingStreamFilter()
+        thinking_filter = ThinkingStreamFilter(
+            passthrough_if_no_think=think_disabled,
+        )
 
         full_reply = ""
 

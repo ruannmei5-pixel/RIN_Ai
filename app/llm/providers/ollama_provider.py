@@ -3,11 +3,10 @@ ollama_provider.py
 
 TAHAP 3 — Adapter yang membungkus `OllamaClient` (app/llm/ollama_client.py,
 TIDAK diubah strukturnya) menjadi `AIProvider` yang seragam dengan
-NvidiaProvider & OpenRouterProvider.
+NvidiaProvider.
 
-Ollama TETAP dipertahankan sebagai local AI provider dan fallback
-default (lihat BATASAN pada instruksi TAHAP 3: "Jangan menghapus
-Ollama"). Semua perilaku OllamaClient yang sudah ada (streaming,
+Ollama adalah local AI provider dan FALLBACK/BACKUP untuk NVIDIA AI
+(NVIDIA = provider utama, lihat app/llm/router.py). Semua perilaku OllamaClient yang sudah ada (streaming,
 thinking-filter Qwen, error handling) TIDAK disentuh — adapter ini
 hanya menerjemahkan exception OllamaError -> ProviderError yang
 dipakai lintas provider.
@@ -32,6 +31,7 @@ from app.llm.base import (
 from app.llm.ollama_client import (
     OllamaClient,
     OllamaConnectionError,
+    OllamaError,
     OllamaModelNotFoundError,
     OllamaResponseError,
     OllamaTimeoutError,
@@ -65,6 +65,11 @@ class OllamaProvider(AIProvider):
             raise ProviderTimeoutError(str(exc)) from exc
         except OllamaResponseError as exc:
             raise ProviderResponseError(str(exc)) from exc
+        except OllamaError as exc:
+            # OllamaError generik (mis. dari _raise_generic) tetap harus
+            # menjadi ProviderError supaya router/routes memperlakukannya
+            # secara seragam.
+            raise ProviderResponseError(str(exc)) from exc
 
     def chat_stream(self, messages: List[ChatMessage], model: Optional[str] = None) -> Iterator[str]:
         try:
@@ -78,6 +83,8 @@ class OllamaProvider(AIProvider):
             raise ProviderTimeoutError(str(exc)) from exc
         except OllamaResponseError as exc:
             raise ProviderResponseError(str(exc)) from exc
+        except OllamaError as exc:
+            raise ProviderResponseError(str(exc)) from exc
 
     # --------------------------------------------------------------
     # MODELS / HEALTH
@@ -85,7 +92,7 @@ class OllamaProvider(AIProvider):
 
     def is_configured(self) -> bool:
         # Ollama local selalu dianggap "configured" (host+model punya
-        # default di config.json) — beda dari NVIDIA/OpenRouter yang
+        # default di config.json) — beda dari NVIDIA yang
         # butuh API key eksplisit.
         return bool(self._client.host) and bool(self._client.model)
 
@@ -96,9 +103,8 @@ class OllamaProvider(AIProvider):
     def get_models(self) -> List[str]:
         """
         Dynamic model discovery via `GET {host}/api/tags` (endpoint
-        Ollama existing). Tidak menyentuh OllamaClient — panggilan
-        HTTP terpisah, ringan, dengan timeout pendek supaya tidak
-        memblokir UI Settings jika Ollama sedang lambat/mati.
+        Ollama existing). Panggilan HTTP terpisah, ringan, dengan timeout
+        pendek supaya tidak memblokir UI Settings jika Ollama lambat/mati.
         """
         try:
             response = httpx.get(
@@ -129,7 +135,7 @@ class OllamaProvider(AIProvider):
                 available=True,
                 detail=f"{self._client.model} @ {self._client.host}",
             )
-        except Exception as exc:
+        except Exception:
             return ProviderHealth(
                 configured=True,
                 available=False,

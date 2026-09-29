@@ -16,7 +16,7 @@
     "web_search": {
         "enabled": true,
         "max_results": 3,
-        "timeout_seconds": 8
+        "timeout_seconds": 8,
+        "llm_classifier": false
     }
 }
-

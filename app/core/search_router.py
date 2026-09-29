@@ -4,45 +4,29 @@ search_router.py
 Smart Search Detection untuk RIN (AUTOMATIC WEB SEARCH FEATURE).
 
 Menentukan apakah sebuah pesan user membutuhkan web search sebelum
-dijawab, memakai pendekatan HYBRID:
+dijawab. Keputusan dibuat SECARA LOKAL DAN INSTAN (rule/keyword, ~0ms):
 
-    1. RULE/KEYWORD (cepat, gratis, deterministic)
-       - Kasus yang jelas butuh search (berita, harga, cuaca, jadwal,
-         hasil pertandingan, jabatan orang saat ini, versi terbaru,
-         dst) -> langsung True, TANPA memanggil Ollama sama sekali.
-       - Kasus yang jelas TIDAK butuh search (matematika, konsep,
-         brainstorming, menulis/rewriting, coding dasar) -> langsung
-         False, TANPA memanggil Ollama sama sekali.
+    1. STRONG keyword (berita, harga, cuaca, skor, jabatan saat ini,
+       versi terbaru, dst)                      -> True
+    2. NEVER keyword (konsep, coding, matematika, menulis)  -> False
+    3. WEAK keyword (kata waktu seperti "sekarang"/"hari ini"/tahun
+       2026) HANYA jika disertai kata tanya info (siapa/berapa/kapan/
+       kondisi/status/...)                      -> True
+    4. Selain itu (pertanyaan biasa/obrolan)    -> False
 
-    2. LLM CLASSIFIER RINGAN (untuk kasus ambigu saja)
-       - Hanya dipanggil jika kedua daftar keyword di atas TIDAK
-         cocok sama sekali.
-       - Satu pertanyaan singkat ke Ollama ("YA"/"TIDAK" saja),
-         non-streaming, dengan fallback AMAN (anggap TIDAK butuh
-         search) jika classifier gagal/timeout/format aneh, supaya
-         chat biasa tidak pernah ikut gagal hanya karena langkah
-         opsional ini.
-
-TRADE-OFF PERFORMA (lihat juga README/jawaban):
-    - Rule/keyword: ~0ms overhead, tapi tidak selalu akurat untuk
-      kalimat yang tidak memakai keyword baku.
-    - LLM classifier: akurasi lebih baik untuk kasus ambigu, TAPI
-      menambah satu roundtrip ke Ollama (biasanya <1-3 detik untuk
-      model kecil seperti qwen3:4b) SEBELUM jawaban utama mulai
-      di-generate/streaming. Karena itu, LLM classifier HANYA dipakai
-      sebagai fallback untuk kasus yang benar-benar ambigu, bukan
-      untuk setiap pesan.
+OPTIMASI LATENSI: tidak ada request LLM untuk pertanyaan biasa.
+Classifier LLM HANYA berjalan jika caller memberikan `client` secara
+eksplisit (lihat config.web_search.llm_classifier / env
+SEARCH_ROUTER_LLM_CLASSIFIER, default MATI).
 
 Modul ini SENGAJA tidak pernah melempar exception ke caller
 (app/core/assistant.py): kegagalan apa pun pada langkah opsional ini
-selalu menghasilkan `False` (tidak melakukan search), supaya chat
-biasa tetap berjalan seperti biasa (lihat ATURAN PENTING: jangan
-membuat search dilakukan pada semua pertanyaan, dan jangan membuat
-RIN crash).
+selalu menghasilkan `False` (tidak melakukan search).
 """
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from app.core.logger import get_logger
@@ -52,14 +36,12 @@ logger = get_logger()
 
 
 # ============================================================
-# KEYWORD: JELAS BUTUH SEARCH
+# KEYWORD: JELAS BUTUH SEARCH (STRONG)
 # ============================================================
 
-_ALWAYS_SEARCH_KEYWORDS: tuple[str, ...] = (
+_STRONG_SEARCH_KEYWORDS: tuple[str, ...] = (
+    # --- perilaku lama (dipertahankan) ---
     "terbaru",
-    "hari ini",
-    "sekarang",
-    "saat ini",
     "kondisi terkini",
     "cuaca",
     "berita",
@@ -84,7 +66,104 @@ _ALWAYS_SEARCH_KEYWORDS: tuple[str, ...] = (
     "saham",
     "harga tiket",
     "jam tayang",
+    # --- tambahan (pengganti classifier LLM untuk kasus umum) ---
+    "terkini",
+    "kabar terbaru",
+    "breaking news",
+    "klasemen",
+    "hasil liga",
+    "jadwal liga",
+    "jadwal bola",
+    "ramalan cuaca",
+    "prakiraan cuaca",
+    "curah hujan",
+    "ihsg",
+    "bitcoin",
+    "kripto",
+    "crypto",
+    "siapa ceo",
+    "siapa direktur",
+    "siapa gubernur",
+    "siapa menteri",
+    "siapa ketua",
+    "siapa pemenang",
+    "kapan rilis",
+    "tanggal rilis",
+    "release date",
+    "release notes",
+    "changelog",
+    "latest",
+    "news",
+    "weather",
+    "stock price",
+    "exchange rate",
+    "who won",
+    "who is the current",
 )
+
+# ============================================================
+# KEYWORD: BUTUH SEARCH HANYA JIKA ADA KATA TANYA INFO (WEAK)
+# ============================================================
+#
+# Kata waktu seperti "hari ini"/"sekarang" sering muncul di obrolan
+# biasa ("aku capek hari ini", "buat kodenya sekarang"), jadi tidak
+# cukup sendirian untuk memicu search (yang menambah latensi Tavily).
+
+_WEAK_TIME_KEYWORDS: tuple[str, ...] = (
+    "hari ini",
+    "sekarang",
+    "saat ini",
+    "kini",
+    "minggu ini",
+    "bulan ini",
+    "tahun ini",
+    "kemarin",
+    "semalam",
+    "tadi malam",
+)
+
+_INFO_QUESTION_CUES: tuple[str, ...] = (
+    "siapa",
+    "berapa",
+    "kapan",
+    "kondisi",
+    "status",
+    "update",
+    "info",
+    "perkembangan",
+    "daftar",
+    "rekomendasi",
+    "jadwal",
+    "hasil",
+    "terlaris",
+    "terbaik",
+    "who",
+    "when",
+    "how much",
+)
+
+# Tahun 2025+ juga dianggap kata waktu lemah.
+_YEAR_PATTERN = r"20(?:2[5-9]|[3-9]\d)"
+
+
+def _compile_keywords(keywords: tuple[str, ...], extra: str = "") -> "re.Pattern[str]":
+    """
+    Regex batas-kata untuk daftar keyword (multi-kata didukung).
+
+    Awalan Indonesia yang membuat arti berubah ("menghargai", "berharga",
+    "skoring") TIDAK cocok, tapi akhiran umum (-nya/-lah/-kah) tetap cocok
+    ("harganya", "beritanya").
+    """
+    ordered = sorted(keywords, key=len, reverse=True)
+    body = "|".join(re.escape(keyword) for keyword in ordered)
+    if extra:
+        body = f"{body}|{extra}" if body else extra
+    return re.compile(rf"(?<!\w)(?:{body})(?:nya|lah|kah)?(?!\w)")
+
+
+_STRONG_RE = _compile_keywords(_STRONG_SEARCH_KEYWORDS)
+_WEAK_TIME_RE = _compile_keywords(_WEAK_TIME_KEYWORDS, extra=_YEAR_PATTERN)
+_INFO_CUE_RE = _compile_keywords(_INFO_QUESTION_CUES)
 
 # ============================================================
 # KEYWORD: JELAS TIDAK BUTUH SEARCH
@@ -121,7 +200,7 @@ def _contains_any(text_lower: str, keywords: tuple[str, ...]) -> bool:
 
 
 # ============================================================
-# LLM CLASSIFIER (untuk kasus ambigu)
+# LLM CLASSIFIER (opsional, opt-in)
 # ============================================================
 
 _CLASSIFIER_SYSTEM_PROMPT = (
@@ -199,9 +278,9 @@ def needs_web_search(
 
     Args:
         text: pesan user.
-        client: OllamaClient untuk classifier LLM pada kasus ambigu.
-            Jika None, kasus ambigu dianggap TIDAK butuh search (fail
-            safe, tanpa memanggil Ollama sama sekali).
+        client: OPSIONAL. OllamaClient untuk classifier LLM pada kasus
+            yang tidak cocok aturan apa pun. Default None -> pertanyaan
+            biasa dianggap TIDAK butuh search, tanpa request LLM apa pun.
     """
 
     if not text or not text.strip():
@@ -209,29 +288,25 @@ def needs_web_search(
 
     text_lower = text.lower()
 
-    # --------------------------------------------------------
-    # 1. RULE: jelas butuh search
-    # --------------------------------------------------------
-
-    if _contains_any(text_lower, _ALWAYS_SEARCH_KEYWORDS):
-        logger.info("SEARCH_ROUTER: keyword(always) -> True | text=%r", text[:80])
+    # 1. RULE: jelas butuh search (STRONG)
+    if _STRONG_RE.search(text_lower):
+        logger.info("SEARCH_ROUTER: keyword(strong) -> True | text=%r", text[:80])
         return True
 
-    # --------------------------------------------------------
     # 2. RULE: jelas TIDAK butuh search
-    # --------------------------------------------------------
-
     if _contains_any(text_lower, _NEVER_SEARCH_KEYWORDS):
         logger.info("SEARCH_ROUTER: keyword(never) -> False | text=%r", text[:80])
         return False
 
-    # --------------------------------------------------------
-    # 3. AMBIGU: LLM classifier ringan (opsional)
-    # --------------------------------------------------------
+    # 3. RULE: kata waktu (weak) + kata tanya info
+    if _WEAK_TIME_RE.search(text_lower) and _INFO_CUE_RE.search(text_lower):
+        logger.info("SEARCH_ROUTER: keyword(time+question) -> True | text=%r", text[:80])
+        return True
 
+    # 4. PERTANYAAN BIASA: tanpa search, tanpa LLM kecuali client diberikan.
     if client is None:
         logger.info(
-            "SEARCH_ROUTER: ambigu tanpa classifier -> False | text=%r",
+            "SEARCH_ROUTER: pertanyaan biasa -> False (tanpa LLM) | text=%r",
             text[:80],
         )
         return False

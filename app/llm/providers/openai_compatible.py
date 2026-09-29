@@ -6,18 +6,9 @@ OpenAI-style Chat Completions API (`POST {base_url}/chat/completions`).
 
 Dipakai oleh:
 - NvidiaProvider  (app/llm/providers/nvidia_provider.py)
-- OpenRouterProvider (app/llm/providers/openrouter_provider.py)
-
-Kedua provider di atas HANYA berbeda pada:
-- nama/id
-- base_url default
-- (opsional) header tambahan
 
 Semua logic HTTP, streaming (SSE), dan error handling ada di SATU
-tempat ini supaya tidak ada dua implementasi yang berbeda untuk
-"provider OpenAI-compatible" di seluruh aplikasi (lihat instruksi
-TAHAP 3: "Jangan membuat masing-masing provider memiliki struktur
-response yang berbeda").
+tempat ini.
 
 KEAMANAN:
 - API key HANYA dipakai untuk membangun header Authorization di sini,
@@ -29,6 +20,8 @@ KEAMANAN:
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
@@ -62,8 +55,7 @@ class OpenAICompatibleProvider(AIProvider):
     Provider generik untuk API bergaya OpenAI Chat Completions.
 
     Subclass HANYA perlu mengisi `id`, `display_name`, dan default
-    base_url lewat constructor masing-masing (lihat nvidia_provider.py
-    / openrouter_provider.py).
+    base_url lewat constructor masing-masing (lihat nvidia_provider.py).
     """
 
     def __init__(
@@ -71,14 +63,56 @@ class OpenAICompatibleProvider(AIProvider):
         api_key: str,
         base_url: str,
         model: str,
-        timeout_seconds: int = 60,
+        timeout_seconds: float = 25.0,
         extra_headers: Optional[Dict[str, str]] = None,
+        connect_timeout_seconds: float = 5.0,
+        transport: Optional[httpx.BaseTransport] = None,
     ) -> None:
         self.api_key = (api_key or "").strip()
         self.base_url = (base_url or "").rstrip("/")
         self.model = (model or "").strip()
+        # timeout_seconds dipakai untuk DUA hal: batas tunggu byte
+        # berikutnya dari server (httpx read timeout) DAN batas total
+        # menunggu token pertama pada streaming. Setelah itu router
+        # (app/llm/router.py) fallback ke provider cadangan.
         self.timeout_seconds = timeout_seconds
+        self.connect_timeout_seconds = connect_timeout_seconds
         self._extra_headers = extra_headers or {}
+
+        # Satu httpx.Client dipakai ulang (connection pooling + keep-alive),
+        # sehingga TCP/TLS handshake hanya terjadi sekali. Dibuat lazy.
+        self._transport = transport
+        self._client: Optional[httpx.Client] = None
+        self._client_lock = threading.Lock()
+
+    def _timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            connect=self.connect_timeout_seconds,
+            read=self.timeout_seconds,
+            write=10.0,
+            pool=5.0,
+        )
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None:
+            with self._client_lock:
+                if self._client is None:
+                    self._client = httpx.Client(
+                        timeout=self._timeout(),
+                        limits=httpx.Limits(
+                            max_connections=10,
+                            max_keepalive_connections=5,
+                            keepalive_expiry=60.0,
+                        ),
+                        transport=self._transport,
+                    )
+        return self._client
+
+    def close(self) -> None:
+        """Menutup koneksi persisten (opsional; dipanggil saat shutdown)."""
+        client, self._client = self._client, None
+        if client is not None:
+            client.close()
 
     # --------------------------------------------------------------
     # CONFIG
@@ -129,19 +163,22 @@ class OpenAICompatibleProvider(AIProvider):
         }
 
         try:
-            response = httpx.post(
+            response = self._get_client().post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
-                timeout=self.timeout_seconds,
             )
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(
-                f"{self.display_name}: request melebihi {self.timeout_seconds} detik."
+                f"{self.display_name}: request melebihi {self.timeout_seconds:g} detik."
             ) from exc
         except httpx.RequestError as exc:
             raise ProviderConnectionError(
                 f"{self.display_name}: tidak dapat terhubung ({exc.__class__.__name__})."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderResponseError(
+                f"{self.display_name}: error HTTP tak terduga ({exc.__class__.__name__})."
             ) from exc
 
         self._raise_for_status(response)
@@ -176,14 +213,14 @@ class OpenAICompatibleProvider(AIProvider):
         }
 
         full_reply = ""
+        started_at = time.monotonic()
 
         try:
-            with httpx.stream(
+            with self._get_client().stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 json=payload,
                 headers=self._headers(),
-                timeout=self.timeout_seconds,
             ) as response:
                 if response.status_code >= 400:
                     # Baca body error (bukan stream) sebelum melempar.
@@ -191,6 +228,18 @@ class OpenAICompatibleProvider(AIProvider):
                     self._raise_for_status(response)
 
                 for line in response.iter_lines():
+                    # Batas total menunggu token pertama. httpx read
+                    # timeout saja tidak cukup: jika server terus
+                    # mengirim keep-alive/event kosong, read timeout
+                    # tidak pernah terpicu dan RIN menggantung.
+                    if (
+                        not full_reply
+                        and time.monotonic() - started_at > self.timeout_seconds
+                    ):
+                        raise ProviderTimeoutError(
+                            f"{self.display_name}: token pertama tidak tiba "
+                            f"dalam {self.timeout_seconds:g} detik."
+                        )
                     if not line:
                         continue
                     if isinstance(line, bytes):
@@ -221,11 +270,15 @@ class OpenAICompatibleProvider(AIProvider):
 
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(
-                f"{self.display_name}: streaming timeout setelah {self.timeout_seconds} detik."
+                f"{self.display_name}: streaming timeout setelah {self.timeout_seconds:g} detik."
             ) from exc
         except httpx.RequestError as exc:
             raise ProviderConnectionError(
                 f"{self.display_name}: koneksi streaming terputus ({exc.__class__.__name__})."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderResponseError(
+                f"{self.display_name}: error HTTP streaming tak terduga ({exc.__class__.__name__})."
             ) from exc
 
         if not full_reply.strip():
