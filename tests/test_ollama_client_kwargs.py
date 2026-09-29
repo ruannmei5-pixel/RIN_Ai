@@ -31,14 +31,26 @@ def _client():
 MSGS = [ChatMessage(role="user", content="hai rin")]
 
 
-def test_chat_stream_valid_kwargs_and_passthrough():
+def test_chat_stream_valid_kwargs():
     c = _client()
     chunks = list(c.chat_stream(MSGS))
     assert "".join(chunks) == "Halo dunia"
     assert c._client.calls[0]["think"] is False
-    assert len(chunks) >= 2  # tidak ditahan sampai stream selesai
 
 
 def test_chat_valid_kwargs():
     c = _client()
     assert c.chat(MSGS) == "Halo dunia"
+
+
+def test_chat_stream_hides_reasoning_without_opening_tag():
+    """qwen3 sering menulis reasoning tanpa <think> lalu menutup dengan </think>."""
+    c = _client()
+    c._client.chat = lambda **kw: iter([
+        {"message": {"content": "Okay, the user said hai. "}},
+        {"message": {"content": "Let me answer.\n</think>\n\n"}},
+        {"message": {"content": "Hai Rin! Ada yang bisa aku bantu?"}},
+    ])
+    out = "".join(c.chat_stream(MSGS))
+    assert "Okay" not in out and "</think>" not in out
+    assert out.strip() == "Hai Rin! Ada yang bisa aku bantu?"

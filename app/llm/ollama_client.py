@@ -514,7 +514,11 @@ class OllamaClient:
         # ----------------------------------------------------
 
         thinking_filter = ThinkingStreamFilter(
-            passthrough_if_no_think=think_disabled,
+            # SENGAJA False: qwen3 di beberapa versi Ollama tetap menulis
+            # reasoning (tanpa tag pembuka <think>) walau think=False,
+            # lalu menutupnya dengan </think>. Passthrough akan membocorkan
+            # reasoning itu ke user. Filter menahan output sampai </think>.
+            passthrough_if_no_think=False,
         )
 
         full_reply = ""
