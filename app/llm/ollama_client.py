@@ -256,6 +256,7 @@ class OllamaClient:
                 model=active_model,
                 messages=payload,
                 think=False,
+                keep_alive="30m",
                 stream=False,
             )
 
