@@ -147,6 +147,39 @@ def _build_messages_with_search_failed_note(
 
     return [*head, note, last_message]
 
+def _build_messages_with_search_failed_note(
+    history: List[ChatMessage],
+) -> List[ChatMessage]:
+    ...  # (fungsi ini sudah ada, jangan diubah)
+
+
+# ============================================================
+# BATAS CONTEXT: kirim system prompt + N pesan terakhir saja
+# ============================================================
+
+_MAX_CONTEXT_MESSAGES = 12
+
+
+def _limit_context(
+    messages: List[ChatMessage],
+    max_messages: int = _MAX_CONTEXT_MESSAGES,
+) -> List[ChatMessage]:
+    """
+    Membatasi jumlah pesan yang dikirim ke AI provider supaya prompt
+    tidak terus membengkak. self._history TIDAK diubah; hanya list
+    untuk satu panggilan ini.
+    """
+    if len(messages) <= max_messages + 1:
+        return messages
+
+    head = messages[:1] if messages and messages[0].role == "system" else []
+
+    return [*head, *messages[-max_messages:]]
+
+
+class Assistant:
+    ...
+
 
 class Assistant:
     """
@@ -641,6 +674,8 @@ class Assistant:
                     user_input
                 )
 
+                messages_for_llm = _limit_context(messages_for_llm)
+
                 reply, outcome = self.ai_router.chat(
                     messages_for_llm,
                     provider_id=provider,
@@ -773,6 +808,8 @@ class Assistant:
                     user_input
                 )
 
+                messages_for_llm = _limit_context(messages_for_llm)
+
                 stream, outcome = self.ai_router.chat_stream(
                     messages_for_llm,
                     provider_id=provider,
@@ -856,3 +893,16 @@ class Assistant:
                 "Gagal menyimpan memory RIN: %s",
                 exc,
             )
+
+    _MAX_CONTEXT_MESSAGES = 12
+
+
+    def _limit_context(
+        messages: List[ChatMessage],
+        max_messages: int = _MAX_CONTEXT_MESSAGES,
+    ) -> List[ChatMessage]:
+        """Kirim system prompt + N pesan terakhir saja (self._history tidak diubah)."""
+        if len(messages) <= max_messages + 1:
+            return messages
+        head = messages[:1] if messages and messages[0].role == "system" else []
+        return [*head, *messages[-max_messages:]]
