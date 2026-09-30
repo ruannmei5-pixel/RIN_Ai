@@ -239,6 +239,7 @@ class AIProviderRouter:
 
             return _fallback_stream(), ChatOutcome(fallback_id, requested, True)
 
+        # --- jalur normal (provider utama berhasil) ---
         logger.info(
             "AI_ROUTER: provider=%s first_chunk=%.2fs",
             requested,
@@ -246,12 +247,24 @@ class AIProviderRouter:
         )
 
         def _stream() -> Iterator[str]:
-            if first_chunk is not None:
-                yield first_chunk
-            yield from generator
+            chunks = 0
+            try:
+                if first_chunk is not None:
+                    chunks += 1
+                    yield first_chunk
+                for chunk in generator:
+                    chunks += 1
+                    yield chunk
+            finally:
+                logger.info(
+                    "AI_ROUTER: provider=%s stream selesai total=%.2fs chunks=%d",
+                    requested,
+                    time.monotonic() - started_at,
+                    chunks,
+                )
 
         return _stream(), ChatOutcome(requested, requested, False)
-
+    
     # --------------------------------------------------------------
     # COOLDOWN
     # --------------------------------------------------------------

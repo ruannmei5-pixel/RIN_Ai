@@ -17,11 +17,46 @@ System prompt yang dihasilkan di sini HANYA dipakai saat membangun
 context untuk Ollama (lihat Assistant._build_initial_history di
 assistant.py) dan TIDAK PERNAH disimpan sebagai baris user/assistant ke
 SQLite memory.
+
+FORMAT JAWABAN:
+Aturan Markdown di bawah (_FORMAT_RULES) dipasangkan dengan renderer
+frontend web/js/markdown.js. Sengaja dibuat ringkas karena model kecil
+lebih patuh pada aturan pendek yang konkret.
 """
 
 from __future__ import annotations
 
 from app.core.config import AppConfig
+
+
+_FORMAT_RULES = (
+    "FORMAT JAWABAN (Markdown):\n"
+    "- Pilih format sesuai isi jawaban, jangan dipaksakan. Obrolan atau "
+    "jawaban singkat cukup berupa satu-dua paragraf biasa, tanpa heading.\n"
+    "- Paragraf pendek (maksimal 3-4 kalimat), dipisah satu baris kosong.\n"
+    "- Banyak item setara → bullet list (- item). Langkah berurutan → "
+    "numbered list (1. 2. 3.). Pakai satu gaya list yang konsisten.\n"
+    "- Jawaban dengan beberapa bagian → heading Markdown (## atau ###), "
+    "dengan baris kosong sebelum dan sesudahnya. Jangan pakai heading "
+    "untuk jawaban pendek.\n"
+    "- Perbandingan atau data terstruktur → tabel Markdown. WAJIB: setiap "
+    "baris tabel (header, pemisah |---|---|, dan tiap baris data) ditulis "
+    "di BARIS BARU TERSENDIRI, dengan baris kosong sebelum tabel. Jangan "
+    "pernah menulis seluruh tabel dalam satu baris. Untuk tabel dengan "
+    "lebih dari 5 kolom, pecah menjadi beberapa tabel kecil.\n"
+    "- Kode, script, command, konfigurasi, atau query → SELALU dalam "
+    "fenced code block dengan nama bahasa (```python, ```javascript, "
+    "```html, ```css, ```sql, ```powershell, ```bash, ```json). Selalu "
+    "tutup dengan ``` di baris sendiri. Jangan mencampur kode dengan "
+    "kalimat biasa dalam satu baris, dan jangan membungkus seluruh "
+    "jawaban dalam code block.\n"
+    "- Nama file, variabel, fungsi, command pendek, dan endpoint → "
+    "`inline code`.\n"
+    "- **Bold** hanya untuk hal yang benar-benar penting, secukupnya.\n"
+    "- Catatan atau peringatan → blockquote (> **Catatan:** ...).\n"
+    "- Jangan menulis HTML mentah. Jangan menaruh teks Markdown di "
+    "dalam kode.\n"
+)
 
 
 def build_system_prompt(config: AppConfig) -> str:
@@ -58,5 +93,6 @@ def build_system_prompt(config: AppConfig) -> str:
         "OUTPUT:\n"
         "- Jangan pernah menampilkan proses berpikir, reasoning, analisis "
         "internal, catatan internal, atau tag <think>.\n"
-        "- Hanya tampilkan jawaban akhir yang sudah final kepada user.\n"
+        "- Hanya tampilkan jawaban akhir yang sudah final kepada user.\n\n"
+        + _FORMAT_RULES
     )

@@ -310,102 +310,19 @@
   });
 
   // ---------------------------------------------------------
-  // Minimal Markdown renderer (self-contained, no CDN dependency
-  // so RIN keeps working fully offline on the local network).
-  // Supports: headings, code blocks, inline code, bold, italic,
-  // bullet lists, numbered lists, paragraphs.
+  // Safety net: strip any accidental thinking/reasoning content
+  // or Ollama metadata that might slip through, even though the
+  // backend (Assistant.ask_stream) already filters <think> tags.
   // ---------------------------------------------------------
-  function escapeHtml(str) {
-    return str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  function renderInline(text) {
-    let out = escapeHtml(text);
-    out = out.replace(/`([^`]+?)`/g, (m, code) => `<code>${code}</code>`);
-    out = out.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
-    out = out.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
+  function stripThinking(text) {
+    if (!text) return text;
+    let out = text;
+    out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+    out = out.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
+    // Unclosed opening tag still streaming in - hide until it closes.
+    out = out.replace(/<think>[\s\S]*$/gi, "");
+    out = out.replace(/<reasoning>[\s\S]*$/gi, "");
     return out;
-  }
-
-  function renderMarkdown(raw) {
-    const text = raw || "";
-    const blocks = text.split(/```/);
-    let html = "";
-
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      if (i % 2 === 1) {
-        let content = block;
-        const firstNewline = content.indexOf("\n");
-        if (firstNewline !== -1 && content.slice(0, firstNewline).trim().length < 20) {
-          content = content.slice(firstNewline + 1);
-        }
-        html += `<pre><code>${escapeHtml(content.replace(/\n$/, ""))}</code></pre>`;
-        continue;
-      }
-
-      const lines = block.split("\n");
-      let i2 = 0;
-      let paragraphBuf = [];
-
-      const flushParagraph = () => {
-        if (paragraphBuf.length) {
-          const joined = paragraphBuf.join(" ").trim();
-          if (joined) html += `<p>${renderInline(joined)}</p>`;
-          paragraphBuf = [];
-        }
-      };
-
-      while (i2 < lines.length) {
-        const line = lines[i2];
-
-        if (/^\s*$/.test(line)) {
-          flushParagraph();
-          i2++;
-          continue;
-        }
-
-        const headingMatch = line.match(/^\s*(#{1,6})\s+(.*)$/);
-        if (headingMatch) {
-          flushParagraph();
-          const level = Math.min(headingMatch[1].length, 6);
-          html += `<h${level}>${renderInline(headingMatch[2].trim())}</h${level}>`;
-          i2++;
-          continue;
-        }
-
-        if (/^\s*[-*]\s+/.test(line)) {
-          flushParagraph();
-          const items = [];
-          while (i2 < lines.length && /^\s*[-*]\s+/.test(lines[i2])) {
-            items.push(lines[i2].replace(/^\s*[-*]\s+/, ""));
-            i2++;
-          }
-          html += "<ul>" + items.map((it) => `<li>${renderInline(it)}</li>`).join("") + "</ul>";
-          continue;
-        }
-
-        if (/^\s*\d+[.)]\s+/.test(line)) {
-          flushParagraph();
-          const items = [];
-          while (i2 < lines.length && /^\s*\d+[.)]\s+/.test(lines[i2])) {
-            items.push(lines[i2].replace(/^\s*\d+[.)]\s+/, ""));
-            i2++;
-          }
-          html += "<ol>" + items.map((it) => `<li>${renderInline(it)}</li>`).join("") + "</ol>";
-          continue;
-        }
-
-        paragraphBuf.push(line.trim());
-        i2++;
-      }
-      flushParagraph();
-    }
-
-    return html;
   }
 
   // ---------------------------------------------------------
@@ -414,17 +331,6 @@
   // backend (Assistant.ask_stream) already filters <think> tags.
   // This is a defensive second layer on the frontend only.
   // ---------------------------------------------------------
-  function stripThinking(text) {
-    if (!text) return text;
-    let out = text;
-    out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
-    out = out.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
-    // Unclosed opening tag still streaming in — hide until it closes.
-    out = out.replace(/<think>[\s\S]*$/gi, "");
-    out = out.replace(/<reasoning>[\s\S]*$/gi, "");
-    return out;
-  }
-
   // ---------------------------------------------------------
   // Health check — polls GET /api/health for real status.
   // ---------------------------------------------------------
@@ -538,7 +444,12 @@
 
   function setAssistantContent(bubbleEl, text) {
     rawTextMap.set(bubbleEl, text);
-    bubbleEl.innerHTML = renderMarkdown(stripThinking(text));
+    if (!window.RinMarkdown) {
+      console.error("RinMarkdown tidak termuat; periksa web/js/markdown.js");
+      bubbleEl.textContent = stripThinking(text);
+    } else {
+      bubbleEl.innerHTML = window.RinMarkdown.render(stripThinking(text));
+    }
     scrollToBottom();
   }
 

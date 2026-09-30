@@ -399,6 +399,61 @@
     return s;
   }
 
+  // Model kadang menulis seluruh tabel dalam SATU baris:
+  //   | A | B | |:--|:--| | 1 | 2 | | 3 | 4 |
+  // Pecah kembali menjadi baris-baris tabel yang valid.
+  function fixFlattenedTables(text) {
+    const SEP = /\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|/;
+    const out = [];
+    let inFence = false;
+
+    text.split("\n").forEach(function (line) {
+      if (/^\s*(`{3,}|~{3,})/.test(line)) {
+        inFence = !inFence;
+        out.push(line);
+        return;
+      }
+      if (inFence || line.indexOf("|") === -1) {
+        out.push(line);
+        return;
+      }
+
+      const m = line.match(SEP);
+      // Separator yang berdiri sendiri = tabel normal, biarkan.
+      if (!m || line.trim() === m[0].trim()) {
+        out.push(line);
+        return;
+      }
+
+      const cols = (m[0].match(/\|/g) || []).length - 1;
+      const parts = line.split("|");
+
+      let prefix = parts.shift().trim(); // teks sebelum pipe pertama
+      if (parts.length && parts[parts.length - 1].trim() === "") parts.pop();
+      const tokens = parts.map(function (t) { return t.trim(); });
+
+      // Struktur: header(n), "", separator(n), "", baris(n), "", ...
+      const rows = [];
+      for (let i = 0; i < tokens.length; i += cols + 1) {
+        rows.push(tokens.slice(i, i + cols));
+      }
+
+      const sepOk = rows[1] && rows[1].every(function (c) { return /^:?-{3,}:?$/.test(c); });
+      if (!sepOk) {
+        out.push(line);
+        return;
+      }
+
+      if (prefix) out.push(prefix, "");
+      rows.forEach(function (r) {
+        while (r.length < cols) r.push("");
+        out.push("| " + r.join(" | ") + " |");
+      });
+    });
+
+    return out.join("\n");
+  }
+
   function renderInline(raw) {
     const stash = [];
     const keep = (html) => {
@@ -699,11 +754,10 @@
       const text = String(raw || "").replace(/\r\n?/g, "\n");
       return renderBlocks(text.split("\n"));
     } catch (err) {
-      // Jaring pengaman: tampilkan teks apa adanya, jangan pernah blank.
       return "<p>" + escapeHtml(String(raw || "")).replace(/\n/g, "<br>") + "</p>";
     }
   }
-
+  
   // ---------------------------------------------------------
   // Tombol Salin (event delegation: innerHTML di-render ulang tiap chunk)
   // ---------------------------------------------------------
