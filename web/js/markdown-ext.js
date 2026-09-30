@@ -161,21 +161,45 @@
         if (t.charAt(t.length - 1) === "|") cells.pop(); // sisa setelah "|" terakhir
 
         const sepAt = cells.findIndex(function (c) { return SEP_CELL.test(c); });
-        if (sepAt < 1) return line; // tidak ada pemisah, atau baris pemisah biasa
 
-        let n = 0;
-        while (SEP_CELL.test(cells[sepAt + n] || "")) n++;
+        // Header = sel sebelum pemisah; harus diakhiri sel kosong ("| |").
+        // Baris pemisah biasa (sepAt = 0) atau tanpa header -> bukan kasus ini.
+        if (sepAt < 2 || cells[sepAt - 1] !== "") return line;
 
-        // header (n sel) + 1 sel kosong pemisah baris harus tepat sebelum pemisah
-        if (n < 1 || sepAt !== n + 1 || cells[n] !== "") return line;
-        // Baris terakhir biasanya tidak diikuti sel kosong pemisah.
-        if (cells.length % (n + 1) === n) cells.push("");
-        if (cells.length % (n + 1) !== 0) return line;
+        // Jumlah kolom diambil dari HEADER, bukan dari baris pemisah: model
+        // sering menulis pemisah dengan jumlah kolom yang salah.
+        const n = sepAt - 1;
 
-        const rows = [];
-        for (let i = 0; i < cells.length; i += n + 1) {
-          rows.push("| " + cells.slice(i, i + n).join(" | ") + " |");
+        let m = 0;
+        while (SEP_CELL.test(cells[sepAt + m] || "")) m++;
+
+        const rest = cells.slice(sepAt + m);
+        if (rest.length && rest[0] !== "") return line;
+        rest.shift(); // sel kosong penutup baris pemisah
+
+        // Kelompokkan sisa sel per baris. Utama: per (n+1) sel; jika tidak
+        // pas (baris tidak konsisten), pecah di setiap sel kosong "| |".
+        let bodyRows = [];
+        const body = rest.slice();
+        if (body.length % (n + 1) === n) body.push(""); // baris terakhir tanpa penutup
+        if (body.length % (n + 1) === 0) {
+          for (let i = 0; i < body.length; i += n + 1) bodyRows.push(body.slice(i, i + n));
+        } else {
+          let cur = [];
+          body.forEach(function (c) {
+            if (c === "") { bodyRows.push(cur); cur = []; } else { cur.push(c); }
+          });
+          if (cur.length) bodyRows.push(cur);
         }
+
+        const fit = function (row) {
+          const r = row.slice(0, n);
+          while (r.length < n) r.push("");
+          return "| " + r.join(" | ") + " |";
+        };
+
+        const rows = [fit(cells.slice(0, n)), "| " + new Array(n).fill("---").join(" | ") + " |"];
+        bodyRows.forEach(function (r) { rows.push(fit(r)); });
         return rows.join("\n");
       })
       .join("\n");
